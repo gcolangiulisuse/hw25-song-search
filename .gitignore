@@ -26,3 +26,6 @@ models/*.pth
 # OS
 .DS_Store
 Thumbs.db
+
+# Results files
+results_*.csv
