@@ -40,8 +40,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # 4. Run analysis
-python clap_analysis.py ./songs/HoliznaCC0\ -\ Dreams\ Of\ Lilith\ -\ Rock.mp3 "Electric guitar songs"
-python clap_analysis.py ./songs/Zane\ Little\ -\ Always\ and\ Forever\ -\ Pop.mp3 "Pop relax songs"
+python clap_analysis.py ./songs/you-song.mp3 "text to search"
 
 # 5. Deactivate when done
 deactivate
