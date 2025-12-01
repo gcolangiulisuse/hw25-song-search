@@ -4,108 +4,91 @@
 
 ## Approach
 
-Single audio file analysis with CLI-based text search using CLAP embeddings.
+CLI-based single audio file analyzer that computes similarity between one song and a text query using CLAP embeddings. Model downloads automatically on first run and caches locally in `./models/` directory.
 
 ## Architecture
 
-```
-User Input → Load Audio (librosa) → CLAP Model → Audio Embedding
-                                                        ↓
-User Query → CLAP Model → Text Embedding → Cosine Similarity → Score
-```
-
-## Implementation Files
-
-### `clap_analysis.py`
-CLI tool for analyzing individual songs and computing similarity with text queries.
-
-**Key Functions:**
-- `load_audio_full()` - Loads entire audio file at 48kHz
-- `initialize_model()` - Loads CLAP music-optimized model
-- `analyze_audio()` - Computes embeddings and similarity score
-
-**Usage:**
-```bash
-python clap_analysis.py <audio_file> <search_text>
+```mermaid
+graph TD
+    A[User Input<br/>audio + text] --> B[Load Audio<br/>librosa @ 48kHz<br/>entire file]
+    B --> C[CLAP Model<br/>music_audioset_epoch_15_esc_90.14.pt<br/>auto-download & cache]
+    C --> D[Audio Encoder]
+    C --> E[Text Encoder]
+    D --> F[Audio Embedding<br/>512-dim]
+    E --> G[Text Embedding<br/>512-dim]
+    F --> H[Cosine Similarity]
+    G --> H
+    H --> I[Similarity Score]
+    I --> J[Classification<br/>HIGH/MODERATE/LOW]
 ```
 
-### `requirements.txt`
-Dependencies:
-- `laion-clap` - CLAP framework
-- `librosa` - Audio loading
-- `torch` - Deep learning backend
-- `numpy` - Numerical operations
-
-## Technical Details
-
-**Audio Processing:**
-- Loads entire song (no chunking)
-- Resamples to 48kHz (CLAP requirement)
-- Converts to mono
-- Processes full waveform through model
-
-**Model:**
-- `music_audioset_epoch_15_esc_90.14.pt` (2.35 GB)
-- HTSAT-base audio encoder
-- 512-dimensional embeddings
-- Auto-downloads on first run
-
-**Similarity Metric:**
-- Cosine similarity (dot product of normalized embeddings)
-- Range: -1 to 1 (higher = more similar)
-- Thresholds: >0.3 HIGH, >0.15 MODERATE, ≤0.15 LOW
-
-## Limitations
-
-1. **Single file processing** - No batch mode yet
-2. **No embedding persistence** - Recomputes on every run
-3. **No database** - Can't search across multiple songs
-4. **Memory usage** - Loads entire audio file in RAM
+**Key Components:**
+- `clap_analysis.py` - Main CLI tool
+- `requirements.txt` - Dependencies (laion-clap, librosa, torch, torchvision, numpy)
+- `models/` - Model cache directory (auto-created)
 
 ## Example Usage
 
 ```bash
-# Activate environment
+# 1. Create virtual environment
+python3 -m venv venv
+
+# 2. Activate virtual environment
 source venv/bin/activate
 
-# Test with different queries
-python clap_analysis.py song.mp3 "upbeat pop song"
-python clap_analysis.py song.mp3 "slow jazz piano"
-python clap_analysis.py song.mp3 "energetic rock guitar"
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Run analysis
+python clap_analysis.py ./songs/HoliznaCC0\ -\ Dreams\ Of\ Lilith\ -\ Rock.mp3 "Electric guitar songs"
+python clap_analysis.py ./songs/Zane\ Little\ -\ Always\ and\ Forever\ -\ Pop.mp3 "Pop relax songs"
+
+# 5. Deactivate when done
+deactivate
 ```
 
-**Expected Output:**
+**Good Match Examples:**
+```bash
+python clap_analysis.py ./songs/HoliznaCC0\ -\ Dreams\ Of\ Lilith\ -\ Rock.mp3 "Electric guitar songs"
+python clap_analysis.py ./songs/Zane\ Little\ -\ Always\ and\ Forever\ -\ Pop.mp3 "Pop relax songs"
+```
+
+**Bad Match Example:**
+```bash
+python clap_analysis.py ./songs/Zane\ Little\ -\ Always\ and\ Forever\ -\ Pop.mp3 "Electric guitar songs"
+```
+
+## Expected Output
+
 ```
 ============================================================
 CLAP Audio Analysis
 ============================================================
-Audio file: song.mp3
-Search text: 'upbeat pop song'
+Audio file: ./songs/HoliznaCC0 - Dreams Of Lilith - Rock.mp3
+Search text: 'Electric guitar songs'
 ============================================================
 
-Loading audio: song.mp3
-Audio loaded: 245.32 seconds, 48000 Hz
+Loading audio: ./songs/HoliznaCC0 - Dreams Of Lilith - Rock.mp3
+Audio loaded: 364.46 seconds, 48000 Hz
 Initializing CLAP model...
 Model: music_audioset_epoch_15_esc_90.14.pt (music-optimized)
+Using cached model from: ./models/music_audioset_epoch_15_esc_90.14.pt
 Model loaded successfully!
 
 Analyzing audio...
 Computing audio embedding...
-Computing text embedding for: 'upbeat pop song'
+Computing text embedding for: 'Electric guitar songs'
 
 ============================================================
 RESULTS
 ============================================================
-Similarity Score: 0.3456
+Similarity Score: 0.4235
 
 ✅ HIGH similarity - Audio matches the text description well
 ============================================================
 ```
 
-## Next Steps
-
-1. **Batch processing** - Analyze multiple files at once
-2. **Embedding storage** - Save embeddings to avoid recomputation
-3. **Database integration** - Store and search across song library
-4. **Web interface** - Build UI for easier interaction
-5. **Query optimization** - Test different text prompt formats
+**Similarity Thresholds:**
+- `> 0.3` = ✅ HIGH similarity (strong match)
+- `> 0.15` = ⚠️ MODERATE similarity (partial match)
+- `≤ 0.15` = ❌ LOW similarity (no match)

@@ -2,43 +2,43 @@
 
 **Date:** 1 December 2025
 
-## What is CLAP?
+## CLAP Introduction
 
-Audio-text embedding framework (like CLIP for audio). Enables text-based song search using natural language.
+**CLAP** (Contrastive Language-Audio Pretraining) is an audio-text embedding framework analogous to CLIP but for audio-language alignment. It creates aligned 512-dimensional embeddings for both audio and text, enabling natural language search over audio content.
 
-- **Paper:** [Large-Scale Contrastive Language-Audio Pretraining](https://arxiv.org/abs/2211.06687)
-- **Output:** 512-dim embeddings for audio & text
-- **Sample Rate:** 48kHz
+- **Architecture:** HTSAT audio encoder + BERT text encoder
+- **Training:** Contrastive learning on audio-text pairs
+- **Capability:** Zero-shot classification and semantic search
+- **Paper:** [Large-Scale Contrastive Language-Audio Pretraining](https://arxiv.org/abs/2211.06687) (ICASSP 2023)
 
-## Selected Model
+## CLAP Models
 
-**`music_audioset_epoch_15_esc_90.14.pt`** (2.35 GB)
+| Model | Size | Training Data | GTZAN | Best For |
+|-------|------|---------------|-------|----------|
+| **music_audioset_epoch_15_esc_90.14.pt** ✅ | 2.35 GB | Music + AudioSet + LAION-630K | **71%** | **Music analysis** |
+| music_speech_audioset_epoch_15_esc_89.98.pt | 2.35 GB | Music + Speech + AudioSet + LAION-630K | 51% | General audio |
+| 630k-audioset-best.pt | 1.86 GB | AudioSet + LAION-630K | N/A | General <10s |
 
-- Best for music (71% GTZAN score vs 51% for alternatives)
-- Trained on ~4M music samples
-- Zero-shot capability
-
-## Quick Start
-
-```python
-import laion_clap
-
-model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
-model.load_ckpt('music_audioset_epoch_15_esc_90.14.pt')
-
-audio_embed = model.get_audio_embedding_from_filelist(['song.wav'])
-text_embed = model.get_text_embedding(["upbeat pop song"])
-similarity = audio_embed @ text_embed.T
-```
+**Selected:** `music_audioset_epoch_15_esc_90.14.pt` - Best music understanding (71% GTZAN score), trained on ~4M samples with HTSAT-base encoder.
 
 ## Workflow
 
-1. Pre-compute embeddings for all songs (offline)
-2. Query: generate text embedding → compute similarity → return top results
-3. Performance: ~100-500ms/song, ~10ms/query
+```mermaid
+graph TD
+    A[Audio Files] --> C[CLAP Model]
+    B[Text Query] --> C
+    C --> D[Audio Embeddings<br/>512-dim]
+    C --> E[Text Embeddings<br/>512-dim]
+    D --> F[Cosine Similarity]
+    E --> F
+    F --> G[Similarity Score<br/>-1 to 1, higher = better]
+```
 
-## Next Steps
+**Process:**
+1. Load audio at 48kHz (CLAP requirement)
+2. Generate audio embedding via CLAP
+3. Generate text embedding from search query
+4. Compute cosine similarity (dot product)
+5. Rank results by similarity score
 
-- Download model from [HuggingFace](https://huggingface.co/lukewys/laion_clap)
-- Test with sample songs
-- Build search interface
+**Performance:** ~100-500ms/song (GPU), ~10ms/query, <1ms similarity search
