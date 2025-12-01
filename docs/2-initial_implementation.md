@@ -33,8 +33,8 @@ graph TD
 
 ```mermaid
 graph TD
-    A[Songs Directory<br/>./songs/*.mp3] --> C[Load All Audio]
-    B[Query File<br/>./query/query.txt] --> D[Load All Queries]
+    A[./songs/<br/>*.mp3 files] --> C[Load All Audio]
+    B[./query/query.txt<br/>one query per line] --> D[Load All Queries]
     C --> E[CLAP Model]
     D --> E
     E --> F[Generate Embeddings<br/>N songs × M queries]
@@ -47,6 +47,8 @@ graph TD
 - `multiple_analysis.py` - Batch processing CLI
 - `requirements.txt` - Dependencies (laion-clap, librosa, torch, torchvision, numpy)
 - `models/` - Model cache directory (auto-created)
+- `songs/` - Audio files directory
+- `query/` - Text queries directory
 
 ## Example Usage
 
