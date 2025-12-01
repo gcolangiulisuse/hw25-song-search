@@ -18,12 +18,23 @@ Output:
 import sys
 import os
 import glob
+import random
 import librosa
 import numpy as np
+import torch
 import laion_clap
 import warnings
 from datetime import datetime
 import csv
+
+# Set random seeds for reproducibility (prevents non-deterministic behavior)
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(42)
+
+# Suppress warnings for cleaner output
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore', category=UserWarning)
