@@ -17,12 +17,6 @@ models/*.pth
 # Keep the models directory structure
 !models/.gitkeep
 
-# Audio files
-*.mp3
-*.wav
-*.flac
-*.ogg
-
 # IDE
 .vscode/
 .idea/
