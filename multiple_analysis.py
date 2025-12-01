@@ -27,14 +27,23 @@ import warnings
 from datetime import datetime
 import csv
 
-# Set random seeds for reproducibility (prevents non-deterministic behavior)
+# ============================================================================
+# CRITICAL: Set ALL random seeds for complete reproducibility
+# ============================================================================
 random.seed(42)
 np.random.seed(42)
 torch.manual_seed(42)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(42)
+torch.cuda.manual_seed(42)
+torch.cuda.manual_seed_all(42)
 
-# Suppress warnings for cleaner output
+# Additional PyTorch determinism settings
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.use_deterministic_algorithms(True, warn_only=True)
+
+# Set environment variables for complete determinism
+os.environ['PYTHONHASHSEED'] = '42'
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -150,50 +159,56 @@ def main():
     # Initialize model
     model = initialize_model()
     
+    # Set model to eval mode for determinism
+    model.eval()
+    
     # Prepare results storage
     results = []
     
     # Process each audio file
     print("🔄 Processing audio files...\n")
-    for audio_idx, audio_file in enumerate(audio_files, 1):
-        filename = os.path.basename(audio_file)
-        print(f"[{audio_idx}/{len(audio_files)}] Processing: {filename}")
-        
-        # Load audio
-        try:
-            audio_data = load_audio_full(audio_file)
-            audio_data = audio_data.reshape(1, -1)
+    
+    # Disable gradient computation for inference (improves determinism)
+    with torch.no_grad():
+        for audio_idx, audio_file in enumerate(audio_files, 1):
+            filename = os.path.basename(audio_file)
+            print(f"[{audio_idx}/{len(audio_files)}] Processing: {filename}")
             
-            # Get audio embedding
-            audio_embedding = model.get_audio_embedding_from_data(
-                x=audio_data,
-                use_tensor=False
-            )
-            
-            # Test against all queries
-            for query in queries:
-                # Get text embedding
-                text_embedding = model.get_text_embedding(
-                    [query],
+            # Load audio
+            try:
+                audio_data = load_audio_full(audio_file)
+                audio_data = audio_data.reshape(1, -1)
+                
+                # Get audio embedding
+                audio_embedding = model.get_audio_embedding_from_data(
+                    x=audio_data,
                     use_tensor=False
                 )
                 
-                # Compute similarity
-                similarity = np.dot(audio_embedding[0], text_embedding[0])
-                label = get_similarity_label(similarity)
+                # Test against all queries
+                for query in queries:
+                    # Get text embedding
+                    text_embedding = model.get_text_embedding(
+                        [query],
+                        use_tensor=False
+                    )
+                    
+                    # Compute similarity
+                    similarity = float(np.dot(audio_embedding[0], text_embedding[0]))
+                    label = get_similarity_label(similarity)
+                    
+                    results.append({
+                        'audio_file': filename,
+                        'query': query,
+                        'similarity': similarity,
+                        'label': label
+                    })
                 
-                results.append({
-                    'audio_file': filename,
-                    'query': query,
-                    'similarity': similarity,
-                    'label': label
-                })
-            
-            print(f"   ✅ Completed\n")
-            
-        except Exception as e:
-            print(f"   ❌ Error: {str(e)}\n")
-            continue
+                print(f"   ✅ Completed\n")
+                
+            except Exception as e:
+                print(f"   ❌ Error: {str(e)}\n")
+                continue
     
     # Display results
     print("=" * 80)

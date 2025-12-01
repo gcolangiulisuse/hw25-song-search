@@ -1,9 +1,14 @@
-Pop relax songs
-Electric guitar songs
-high energy
-Pop songs
+pop music
+electric guitar
+rock music
+classical music
 piano
-instrumental
-Female vocals
-Choir
-Classical
+singing
+male vocalist
+female vocalist
+acoustic guitar
+electronic music
+choir
+guitar
+bass guitar
+instrumental music

@@ -1,4 +1,6 @@
-The songs in this folder are used only for test purpose and comes from
+The songs in this folder are used only for test purpose, some of thems and comes from
 - https://freemusicarchive.org/
 
-All the songs in this folder are under Creative Commons - Public domain license
+and are under Creative Commons - Public domain license.
+
+Other songs are SUSE songs parody.
