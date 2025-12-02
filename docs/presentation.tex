@@ -1,0 +1,230 @@
+\documentclass{beamer}
+\usetheme{Madrid}
+\usecolortheme{default}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+    basicstyle=\ttfamily\tiny,
+    breaklines=true,
+    frame=single,
+    language=Python,
+    showstringspaces=false
+}
+
+\title{Song Search using CLAP}
+\subtitle{HW 25}
+\date{December 2, 2025}
+
+\begin{document}
+
+% Title Slide
+\begin{frame}
+\titlepage
+\end{frame}
+
+% Slide 1: CLAP Overview
+\begin{frame}{CLAP Overview}
+\textbf{CLAP} (Contrastive Language-Audio Pretraining) - Audio-text embedding framework
+
+\vspace{0.3cm}
+
+\begin{itemize}
+    \item \textbf{Architecture:} HTSAT audio encoder + BERT text encoder
+    \item \textbf{Output:} 512-dimensional aligned embeddings
+    \item \textbf{Capability:} Zero-shot audio-text semantic search
+    \item \textbf{Selected Model:} \texttt{music\_audioset\_epoch\_15\_esc\_90.14.pt}
+    \begin{itemize}
+        \item 71\% GTZAN accuracy (best for music)
+        \item 2.35 GB, trained on \textasciitilde{}4M samples
+    \end{itemize}
+\end{itemize}
+
+\vspace{0.3cm}
+
+\textbf{Workflow:}
+\begin{enumerate}
+    \item Load audio at 48kHz
+    \item Generate audio \& text embeddings via CLAP
+    \item Compute cosine similarity (dot product)
+    \item Rank by similarity score (-1 to +1)
+\end{enumerate}
+\end{frame}
+
+% Slide 2: Implementation
+\begin{frame}{Implementation}
+\textbf{Two Modes:}
+
+\begin{itemize}
+    \item \textbf{Single Analysis:} \texttt{single\_analysis.py} - One song vs one query
+    \item \textbf{Batch Analysis:} \texttt{multiple\_analysis.py} - All songs vs all queries
+\end{itemize}
+
+\vspace{0.3cm}
+
+\textbf{Architecture:}
+\begin{itemize}
+    \item \texttt{clap\_analysis.py} - Core library (shared)
+    \item Automatic model download \& caching
+    \item Parallel processing across CPU cores
+    \item CSV output with detailed metrics
+\end{itemize}
+
+\vspace{0.3cm}
+
+\textbf{Similarity Thresholds:}
+\begin{itemize}
+    \item $> 0.3$ = HIGH (strong match)
+    \item $> 0.15$ = MODERATE (partial match)
+    \item $\leq 0.15$ = LOW (no match)
+\end{itemize}
+\end{frame}
+
+% Slide 3: Overlapping Segments & Optimization
+\begin{frame}[fragile]{Overlapping Segments \& Optimization}
+\textbf{Problem:} CLAP processes max 10s per inference
+
+\vspace{0.2cm}
+
+\textbf{Solution:} Overlapping segment analysis
+\begin{itemize}
+    \item 10s segments with 50\% overlap (5s hop)
+    \item Ensures full song coverage
+    \item Average score across all segments
+\end{itemize}
+
+\vspace{0.2cm}
+
+\textbf{Performance Optimization:}
+\begin{lstlisting}
+# BEFORE: 17x redundant work
+for song in songs:
+    for query in queries:
+        analyze(song, query)  # 270s per song
+
+# AFTER: Analyze once, compare many
+for song in songs:
+    embeddings = get_embeddings(song)  # 18s
+    for query in queries:
+        compare(embeddings, query)  # 0.15s each
+\end{lstlisting}
+
+\textbf{Result:} \textasciitilde{}15-17x speedup (270s → 20s per song)
+\end{frame}
+
+% Slide 4: Determinism
+\begin{frame}[fragile]{Deterministic Results}
+\textbf{Goal:} Reproducible scores across runs
+
+\vspace{0.3cm}
+
+\textbf{Implementation:}
+\begin{lstlisting}
+# Random seeds
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+
+# PyTorch determinism
+torch.backends.cudnn.deterministic = True
+torch.use_deterministic_algorithms(True)
+
+# Environment variables
+os.environ['PYTHONHASHSEED'] = '42'
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
+\end{lstlisting}
+
+\vspace{0.3cm}
+
+\textbf{Validation:} Exact same scores across multiple runs (verified)
+\end{frame}
+
+% Slide 5: Query Wording Sensitivity
+\begin{frame}{Query Wording Sensitivity}
+\textbf{Finding:} Exact wording dramatically affects results
+
+\vspace{0.3cm}
+
+\textbf{Example - "vocalist" vs "voice":}
+
+\begin{table}[h]
+\small
+\begin{tabular}{lcc}
+\textbf{Query} & \textbf{Score} & \textbf{Label} \\
+\hline
+female vocalist & 0.328 & HIGH \\
+female voice & 0.062 & LOW \\
+\hline
+Difference & -0.267 & \textbf{5× lower!} \\
+\end{tabular}
+\end{table}
+
+\vspace{0.3cm}
+
+\textbf{Best Practices:}
+\begin{itemize}
+    \item Use music industry terms: "vocalist" not "voice"
+    \item Keep queries simple: avoid complex compounds
+    \item Test synonyms to find best wording
+    \item Genre terms work well: "rock music", "classical music"
+\end{itemize}
+\end{frame}
+
+% Slide 6: Song-to-Song Similarity
+\begin{frame}[fragile]{Song-to-Song Similarity}
+\textbf{Feature:} Compare songs to each other using audio embeddings
+
+\vspace{0.3cm}
+
+\textbf{How It Works:}
+\begin{lstlisting}
+# During analysis: store average embedding per song
+avg_embedding = np.mean(segment_embeddings, axis=0)
+avg_embedding /= np.linalg.norm(avg_embedding)  # normalize
+song_embeddings[filename] = avg_embedding
+
+# After all songs: compute pairwise similarities
+for song1, song2 in all_pairs:
+    similarity = np.dot(song_embeddings[song1], 
+                       song_embeddings[song2])
+\end{lstlisting}
+
+\vspace{0.3cm}
+
+\textbf{Key Points:}
+\begin{itemize}
+    \item Same metric as text queries (cosine similarity)
+    \item No re-analysis needed (uses cached embeddings)
+    \item Negligible computation (\textasciitilde{}0.001s for 10 songs)
+\end{itemize}
+\end{frame}
+
+% Slide 7: AI Support
+\begin{frame}{AI Support in Development}
+\textbf{GitHub Copilot (Claude Sonnet 4.5) contributions:}
+
+\vspace{0.3cm}
+
+\begin{itemize}
+    \item \textbf{Determinism fix:} Comprehensive seed initialization (1 iteration)
+    \item \textbf{Performance:} 15x speedup via embedding caching (2 iterations)
+    \item \textbf{Architecture:} Clean library/CLI separation (1 iteration)
+    \item \textbf{Query analysis:} Discovered "vocalist" vs "voice" pattern
+    \item \textbf{Documentation:} Created all technical docs
+\end{itemize}
+
+\vspace{0.3cm}
+
+\textbf{Success Pattern:}
+\begin{itemize}
+    \item Clear, specific requests → Single-iteration solutions
+    \item Performance challenges → Iterative refinement
+    \item Example-based communication → Faster results
+\end{itemize}
+
+\vspace{0.3cm}
+
+\textbf{Key Takeaway:} Most requests resolved in 1 iteration when clearly specified
+\end{frame}
+
+\end{document}
