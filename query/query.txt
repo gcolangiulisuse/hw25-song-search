@@ -5,10 +5,15 @@ classical music
 piano
 singing
 male vocalist
+male voice
 female vocalist
+female voice
 acoustic guitar
 electronic music
 choir
 guitar
 bass guitar
 instrumental music
+pop songs with female vocalist
+classical instrumental song with piano
+pop music wit bass guitar

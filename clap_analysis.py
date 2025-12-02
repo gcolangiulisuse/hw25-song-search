@@ -1,185 +1,342 @@
 #!/usr/bin/env python3
 """
-CLAP Audio Analysis Tool
-Analyzes audio files and computes similarity with text queries using CLAP embeddings.
-
-Usage:
-    python clap_analysis.py <audio_file> <search_text>
-
-Example:
-    python clap_analysis.py song.mp3 "upbeat pop song"
+CLAP Analysis Module
+Handles all CLAP-specific logic for audio analysis with full song coverage.
+Uses parallel processing to analyze segments across multiple CPU cores.
+OPTIMIZED: Analyzes each song once, then compares against all queries.
 """
 
-import sys
 import os
-import librosa
-import numpy as np
-import laion_clap
+import sys
+
+# CRITICAL: Suppress ALL warnings BEFORE importing any other modules
+os.environ['PYTHONWARNINGS'] = 'ignore'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 import warnings
+warnings.filterwarnings('ignore')
 
-# Suppress warnings for cleaner output
-warnings.filterwarnings('ignore', category=UserWarning)
-warnings.filterwarnings('ignore', message='.*NotOpenSSLWarning.*')
+# Suppress transformers logging BEFORE importing
+import logging
+logging.getLogger('transformers').setLevel(logging.ERROR)
+logging.getLogger('transformers.modeling_utils').setLevel(logging.ERROR)
+logging.getLogger().setLevel(logging.ERROR)
+
+import random
+import numpy as np
+import torch
+import laion_clap
+import librosa
+import time
+from multiprocessing import Pool, cpu_count
+from functools import partial
+
+# ============================================================================
+# CRITICAL: Set ALL random seeds for complete reproducibility
+# ============================================================================
+random.seed(42)
+np.random.seed(42)
+torch.manual_seed(42)
+torch.cuda.manual_seed(42)
+torch.cuda.manual_seed_all(42)
+
+# Additional PyTorch determinism settings
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.use_deterministic_algorithms(True, warn_only=True)
+
+# Set environment variables for complete determinism
+os.environ['PYTHONHASHSEED'] = '42'
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
 
-def load_audio_full(audio_path, target_sr=48000):
+# Global model instance for multiprocessing workers
+_global_model = None
+
+def _init_worker_model(model_path):
+    """Initialize model in each worker process (silently)."""
+    global _global_model
+    if _global_model is None:
+        # Suppress ALL output in worker process
+        import os
+        import sys
+        import warnings
+        import logging
+        
+        # Set environment variables
+        os.environ['PYTHONWARNINGS'] = 'ignore'
+        os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+        os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+        
+        # Suppress warnings
+        warnings.filterwarnings('ignore')
+        
+        # Suppress transformers logging
+        logging.getLogger('transformers').setLevel(logging.ERROR)
+        logging.getLogger('transformers.modeling_utils').setLevel(logging.ERROR)
+        logging.getLogger().setLevel(logging.ERROR)
+        
+        # Redirect stdout AND stderr
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = open(os.devnull, 'w')
+        sys.stderr = open(os.devnull, 'w')
+        
+        try:
+            import laion_clap
+            _global_model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
+            _global_model.load_ckpt(model_path)
+            _global_model.eval()
+        finally:
+            sys.stdout.close()
+            sys.stderr.close()
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+        
+        # Set seeds in worker process
+        import random
+        import numpy as np
+        import torch
+        random.seed(42)
+        np.random.seed(42)
+        torch.manual_seed(42)
+
+
+def _process_segment(segment):
     """
-    Load entire audio file with target sample rate.
+    Process a single segment in a worker process.
+    Returns the audio embedding for this segment.
     
     Args:
-        audio_path: Path to audio file
-        target_sr: Target sample rate (CLAP uses 48kHz)
+        segment: Raw audio segment (1D numpy array)
     
     Returns:
-        audio_data: Numpy array of audio samples
-        sr: Sample rate
+        numpy array: Audio embedding
     """
-    print(f"Loading audio: {audio_path}")
-    audio_data, sr = librosa.load(audio_path, sr=target_sr, mono=True)
-    duration = len(audio_data) / sr
-    print(f"Audio loaded: {duration:.2f} seconds, {sr} Hz")
-    return audio_data, sr
+    # Reshape for model input
+    segment_input = segment.reshape(1, -1)
+    
+    # Get audio embedding (CLAP converts RAW audio to spectrogram internally)
+    with torch.no_grad():
+        audio_embedding = _global_model.get_audio_embedding_from_data(
+            x=segment_input,
+            use_tensor=False
+        )
+    
+    return audio_embedding[0]  # Return the embedding vector
 
 
-def initialize_model():
+class CLAPAnalyzer:
     """
-    Initialize CLAP model with music-optimized checkpoint.
-    Downloads model to ./models/ directory if not present.
-    
-    Returns:
-        model: CLAP_Module instance
+    CLAP-based audio analyzer with full song coverage using overlapping segments.
+    Uses parallel processing to analyze segments across all CPU cores.
+    OPTIMIZED: Analyzes each song once, then compares against multiple queries.
     """
-    print("Initializing CLAP model...")
-    print("Model: music_audioset_epoch_15_esc_90.14.pt (music-optimized)")
     
-    model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
-    
-    # Define model path
-    model_dir = os.path.join(os.path.dirname(__file__), 'models')
-    os.makedirs(model_dir, exist_ok=True)
-    model_path = os.path.join(model_dir, 'music_audioset_epoch_15_esc_90.14.pt')
-    
-    # Download model if not present
-    if not os.path.exists(model_path):
-        print(f"\nDownloading model to {model_path}...")
-        print("This is a one-time download (~2.35 GB). Please wait...")
-        import urllib.request
-        url = 'https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt'
+    def __init__(self, segment_length=480000, hop_length=240000, num_workers=None):
+        """
+        Initialize CLAP analyzer.
         
-        def show_progress(block_num, block_size, total_size):
-            downloaded = block_num * block_size
-            percent = min(downloaded * 100.0 / total_size, 100)
-            sys.stdout.write(f"\rProgress: {percent:.1f}% ({downloaded/(1024**3):.2f}/{total_size/(1024**3):.2f} GB)")
-            sys.stdout.flush()
+        Args:
+            segment_length: Length of each segment in samples (480000 = 10 sec at 48kHz)
+            hop_length: Distance between segment starts (240000 = 5 sec at 48kHz = 50% overlap)
+            num_workers: Number of parallel workers (None = auto-detect CPU cores)
+        """
+        self.segment_length = segment_length
+        self.hop_length = hop_length
+        self.sample_rate = 48000
+        self.model = None
+        self.model_path = None
         
-        urllib.request.urlretrieve(url, model_path, reporthook=show_progress)
-        print("\n✅ Model downloaded successfully!")
-    else:
-        print(f"Using cached model from: {model_path}")
-    
-    # Load the checkpoint
-    model.load_ckpt(model_path)
-    
-    print("Model loaded successfully!")
-    return model
-
-
-def analyze_audio(model, audio_data, search_text):
-    """
-    Analyze audio and compute similarity with search text.
-    
-    Args:
-        model: CLAP model
-        audio_data: Audio samples array
-        search_text: Text query to search for
-    
-    Returns:
-        similarity_score: Cosine similarity between audio and text
-    """
-    print("\nAnalyzing audio...")
-    
-    # Reshape audio for CLAP (expects batch dimension)
-    audio_data = audio_data.reshape(1, -1)
-    
-    # Get audio embedding from raw audio data
-    print("Computing audio embedding...")
-    audio_embedding = model.get_audio_embedding_from_data(
-        x=audio_data,
-        use_tensor=False
-    )
-    
-    # Get text embedding
-    print(f"Computing text embedding for: '{search_text}'")
-    text_embedding = model.get_text_embedding(
-        [search_text],
-        use_tensor=False
-    )
-    
-    # Compute cosine similarity (embeddings are normalized)
-    similarity = np.dot(audio_embedding[0], text_embedding[0])
-    
-    return similarity
-
-
-def main():
-    """Main function to handle CLI arguments and run analysis."""
-    
-    # Check arguments
-    if len(sys.argv) != 3:
-        print("Usage: python clap_analysis.py <audio_file> <search_text>")
-        print("\nExample:")
-        print('  python clap_analysis.py song.mp3 "upbeat pop song"')
-        sys.exit(1)
-    
-    audio_file = sys.argv[1]
-    search_text = sys.argv[2]
-    
-    # Validate audio file exists
-    if not os.path.exists(audio_file):
-        print(f"Error: Audio file not found: {audio_file}")
-        sys.exit(1)
-    
-    print("=" * 60)
-    print("CLAP Audio Analysis")
-    print("=" * 60)
-    print(f"Audio file: {audio_file}")
-    print(f"Search text: '{search_text}'")
-    print("=" * 60)
-    print()
-    
-    try:
-        # Load the entire audio file
-        audio_data, sr = load_audio_full(audio_file)
+        # Auto-detect CPU cores
+        if num_workers is None:
+            self.num_workers = cpu_count()
+        else:
+            self.num_workers = num_workers
         
-        # Initialize CLAP model
-        model = initialize_model()
+    def initialize_model(self):
+        """Initialize CLAP model with music-optimized checkpoint."""
+        print("🔧 Initializing CLAP model...")
+        print(f"   CPU cores: {cpu_count()} | Workers: {self.num_workers}")
+        print(f"   Segments: {self.segment_length/self.sample_rate:.0f}s with {100*(1 - self.hop_length/self.segment_length):.0f}% overlap")
         
-        # Analyze audio and compute similarity
-        similarity_score = analyze_audio(model, audio_data, search_text)
+        # Define model path
+        model_dir = os.path.join(os.path.dirname(__file__), 'models')
+        os.makedirs(model_dir, exist_ok=True)
+        self.model_path = os.path.join(model_dir, 'music_audioset_epoch_15_esc_90.14.pt')
         
-        # Display results
-        print("\n" + "=" * 60)
-        print("RESULTS")
-        print("=" * 60)
-        print(f"Similarity Score: {similarity_score:.4f}")
+        # Download model if not present
+        if not os.path.exists(self.model_path):
+            print(f"\n📥 Downloading model (one-time, ~2.35 GB)...")
+            import urllib.request
+            url = 'https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt'
+            
+            def show_progress(block_num, block_size, total_size):
+                downloaded = block_num * block_size
+                percent = min(downloaded * 100.0 / total_size, 100)
+                sys.stdout.write(f"\r   Progress: {percent:.1f}% ({downloaded/(1024**3):.2f}/{total_size/(1024**3):.2f} GB)")
+                sys.stdout.flush()
+            
+            urllib.request.urlretrieve(url, self.model_path, reporthook=show_progress)
+            print("\n   ✅ Download complete!")
+        
+        # Load model silently (suppress verbose output)
+        print("   Loading model weights...", end='', flush=True)
+        
+        old_stdout = sys.stdout
+        old_stderr = sys.stderr
+        sys.stdout = open(os.devnull, 'w')
+        sys.stderr = open(os.devnull, 'w')
+        
+        try:
+            self.model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
+            self.model.load_ckpt(self.model_path)
+            self.model.eval()
+        finally:
+            sys.stdout.close()
+            sys.stderr.close()
+            sys.stdout = old_stdout
+            sys.stderr = old_stderr
+        
+        print(" ✅")
         print()
         
-        # Interpret the score
-        if similarity_score > 0.3:
-            print("✅ HIGH similarity - Audio matches the text description well")
-        elif similarity_score > 0.15:
-            print("⚠️  MODERATE similarity - Audio partially matches the description")
-        else:
-            print("❌ LOW similarity - Audio doesn't match the description")
+    def load_audio(self, audio_path):
+        """
+        Load full audio file at target sample rate.
+        Returns RAW AUDIO WAVEFORM (not spectrogram - CLAP does that internally).
+        """
+        audio_data, sr = librosa.load(audio_path, sr=self.sample_rate, mono=True)
+        return audio_data
+    
+    def create_segments(self, audio_data):
+        """
+        Split RAW audio waveform into overlapping segments.
         
-        print("=" * 60)
+        Args:
+            audio_data: Full audio waveform (1D numpy array of raw audio samples)
         
-    except Exception as e:
-        print(f"\n❌ Error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        Returns:
+            List of audio segments (each is a 1D numpy array)
+        """
+        segments = []
+        total_length = len(audio_data)
+        
+        # If audio is shorter than one segment, pad it
+        if total_length <= self.segment_length:
+            padded = np.pad(audio_data, (0, self.segment_length - total_length), mode='constant')
+            return [padded]
+        
+        # Create overlapping segments by sliding through RAW audio
+        for start in range(0, total_length - self.segment_length + 1, self.hop_length):
+            segment = audio_data[start:start + self.segment_length]
+            segments.append(segment)
+        
+        # Ensure we don't miss the end of the song
+        last_start = len(segments) * self.hop_length
+        if last_start < total_length:
+            # Take the last segment_length samples
+            last_segment = audio_data[-self.segment_length:]
+            segments.append(last_segment)
+        
+        return segments
+    
+    def analyze_audio_with_queries(self, audio_path, queries):
+        """
+        OPTIMIZED: Analyze audio file ONCE, then compare against ALL queries.
+        This is much faster than calling analyze_audio_with_query() multiple times.
+        
+        Args:
+            audio_path: Path to audio file
+            queries: List of text query strings
+        
+        Returns:
+            list of dicts, one per query with:
+                - query: The query text
+                - similarity: Average score across all segments (MAIN METRIC)
+                - max_score: Highest score from any segment
+                - min_score: Lowest score from any segment
+                - std_score: Standard deviation across segments
+                - num_segments: Number of segments analyzed
+                - duration_sec: Audio duration in seconds
+                - analysis_time: Time taken for this query
+        """
+        if self.model is None:
+            raise RuntimeError("Model not initialized. Call initialize_model() first.")
+        
+        print(f"      📊 Analyzing song (loading + {len(queries)} queries)...", end='', flush=True)
+        total_start = time.time()
+        
+        # STEP 1: Load audio and create segments (ONCE)
+        audio_data = self.load_audio(audio_path)
+        duration_sec = len(audio_data) / self.sample_rate
+        segments = self.create_segments(audio_data)
+        
+        # STEP 2: Get audio embeddings for all segments in parallel (ONCE)
+        with Pool(processes=self.num_workers, 
+                  initializer=_init_worker_model, 
+                  initargs=(self.model_path,)) as pool:
+            audio_embeddings = pool.map(_process_segment, segments)
+        
+        # Convert to numpy array for efficient computation
+        audio_embeddings = np.array(audio_embeddings)
+        
+        load_elapsed = time.time() - total_start
+        print(f" ✅ ({load_elapsed:.2f}s)")
+        
+        # STEP 3: Compare against each query (fast, no audio processing)
+        results = []
+        for query_idx, query in enumerate(queries, 1):
+            query_start = time.time()
+            
+            print(f"      [{query_idx}/{len(queries)}] Comparing: \"{query}\"", end='', flush=True)
+            
+            # Get text embedding for this query
+            with torch.no_grad():
+                text_embedding = self.model.get_text_embedding([query], use_tensor=False)
+            
+            # Compute similarities with all audio segments (vectorized)
+            similarities = np.dot(audio_embeddings, text_embedding[0])
+            
+            query_elapsed = time.time() - query_start
+            avg_score = np.mean(similarities)
+            
+            # Get label with icon (with explicit space after icon)
+            label = get_similarity_label(avg_score)
+            icon = get_similarity_icon(avg_score)
+            
+            print(f" → {avg_score:.4f} {icon} {label} ({query_elapsed:.2f}s)")
+            
+            results.append({
+                'query': query,
+                'similarity': avg_score,
+                'max_score': float(np.max(similarities)),
+                'min_score': float(np.min(similarities)),
+                'std_score': float(np.std(similarities)),
+                'num_segments': len(segments),
+                'duration_sec': duration_sec,
+                'analysis_time': query_elapsed
+            })
+        
+        return results
 
 
-if __name__ == "__main__":
-    main()
+def get_similarity_label(score):
+    """Convert similarity score to human-readable label."""
+    if score > 0.3:
+        return "HIGH"
+    elif score > 0.15:
+        return "MODERATE"
+    else:
+        return "LOW"
+
+
+def get_similarity_icon(score):
+    """Get icon for similarity score."""
+    if score > 0.3:
+        return "✅"
+    elif score > 0.15:
+        return "⚠️ "
+    else:
+        return "❌"

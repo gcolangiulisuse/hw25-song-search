@@ -1,90 +1,27 @@
 #!/usr/bin/env python3
 """
-CLAP Multiple Audio Analysis Tool
-Analyzes multiple audio files against multiple text queries using CLAP embeddings.
-
-Usage:
-    python multiple_analysis.py
-
-Reads:
-    - Audio files from ./songs/ directory
-    - Text queries from ./query/query.txt (one query per line)
-
-Output:
-    - Results table showing similarity scores for all combinations
-    - CSV file with detailed results
+Multiple Audio Analysis Orchestrator
+Simple orchestrator that calls clap_analysis for each song/query combination.
+All progress output is handled by clap_analysis.py.
+OPTIMIZED: Analyzes each song once, then compares against all queries.
 """
 
-import sys
 import os
-import glob
-import random
-import librosa
-import numpy as np
-import torch
-import laion_clap
+import sys
+
+# CRITICAL: Set environment variables BEFORE any other imports
+os.environ['PYTHONWARNINGS'] = 'ignore'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
 import warnings
-from datetime import datetime
+warnings.filterwarnings('ignore')
+
+import glob
 import csv
-
-# ============================================================================
-# CRITICAL: Set ALL random seeds for complete reproducibility
-# ============================================================================
-random.seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-torch.cuda.manual_seed_all(42)
-
-# Additional PyTorch determinism settings
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-torch.use_deterministic_algorithms(True, warn_only=True)
-
-# Set environment variables for complete determinism
-os.environ['PYTHONHASHSEED'] = '42'
-os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-
-# Suppress warnings for cleaner output
-warnings.filterwarnings('ignore', category=UserWarning)
-warnings.filterwarnings('ignore', message='.*NotOpenSSLWarning.*')
-
-
-def load_audio_full(audio_path, target_sr=48000):
-    """Load entire audio file with target sample rate."""
-    audio_data, sr = librosa.load(audio_path, sr=target_sr, mono=True)
-    return audio_data
-
-
-def initialize_model():
-    """Initialize CLAP model with music-optimized checkpoint."""
-    print("Initializing CLAP model...")
-    model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
-    
-    # Define model path
-    model_dir = os.path.join(os.path.dirname(__file__), 'models')
-    os.makedirs(model_dir, exist_ok=True)
-    model_path = os.path.join(model_dir, 'music_audioset_epoch_15_esc_90.14.pt')
-    
-    # Download model if not present
-    if not os.path.exists(model_path):
-        print(f"Downloading model to {model_path}...")
-        print("This is a one-time download (~2.35 GB). Please wait...")
-        import urllib.request
-        url = 'https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt'
-        
-        def show_progress(block_num, block_size, total_size):
-            downloaded = block_num * block_size
-            percent = min(downloaded * 100.0 / total_size, 100)
-            sys.stdout.write(f"\rProgress: {percent:.1f}% ({downloaded/(1024**3):.2f}/{total_size/(1024**3):.2f} GB)")
-            sys.stdout.flush()
-        
-        urllib.request.urlretrieve(url, model_path, reporthook=show_progress)
-        print("\n✅ Model downloaded successfully!")
-    
-    model.load_ckpt(model_path)
-    print("✅ Model loaded successfully!\n")
-    return model
+import time
+from datetime import datetime
+from clap_analysis import CLAPAnalyzer, get_similarity_label
 
 
 def load_queries(query_file):
@@ -107,151 +44,83 @@ def load_audio_files(songs_dir):
     for ext in audio_extensions:
         audio_files.extend(glob.glob(os.path.join(songs_dir, ext)))
     
-    # Filter out hidden files and directories
     audio_files = [f for f in audio_files if not os.path.basename(f).startswith('.')]
     
     return sorted(audio_files)
 
 
-def get_similarity_label(score):
-    """Convert similarity score to label."""
-    if score > 0.3:
-        return "HIGH"
-    elif score > 0.15:
-        return "MODERATE"
-    else:
-        return "LOW"
-
-
 def main():
-    """Main function to run batch analysis."""
+    """Main orchestration function."""
     
     # Configuration
     songs_dir = os.path.join(os.path.dirname(__file__), 'songs')
     query_file = os.path.join(os.path.dirname(__file__), 'query', 'query.txt')
     
-    print("=" * 80)
-    print("CLAP MULTIPLE AUDIO ANALYSIS")
-    print("=" * 80)
-    print()
-    
-    # Load queries
-    print("📝 Loading queries...")
+    # Load data
     queries = load_queries(query_file)
-    print(f"   Found {len(queries)} queries:")
-    for i, query in enumerate(queries, 1):
-        print(f"   {i}. \"{query}\"")
-    print()
-    
-    # Load audio files
-    print("🎵 Loading audio files...")
     audio_files = load_audio_files(songs_dir)
+    
     if not audio_files:
         print(f"❌ No audio files found in {songs_dir}")
         sys.exit(1)
     
-    print(f"   Found {len(audio_files)} audio files:")
-    for i, audio_file in enumerate(audio_files, 1):
-        filename = os.path.basename(audio_file)
-        print(f"   {i}. {filename}")
-    print()
+    # Initialize analyzer
+    analyzer = CLAPAnalyzer(segment_length=480000, hop_length=240000)
+    analyzer.initialize_model()
     
-    # Initialize model
-    model = initialize_model()
-    
-    # Set model to eval mode for determinism
-    model.eval()
-    
-    # Prepare results storage
     results = []
     
-    # Process each audio file
-    print("🔄 Processing audio files...\n")
-    
-    # Disable gradient computation for inference (improves determinism)
-    with torch.no_grad():
-        for audio_idx, audio_file in enumerate(audio_files, 1):
-            filename = os.path.basename(audio_file)
-            print(f"[{audio_idx}/{len(audio_files)}] Processing: {filename}")
-            
-            # Load audio
-            try:
-                audio_data = load_audio_full(audio_file)
-                audio_data = audio_data.reshape(1, -1)
-                
-                # Get audio embedding
-                audio_embedding = model.get_audio_embedding_from_data(
-                    x=audio_data,
-                    use_tensor=False
-                )
-                
-                # Test against all queries
-                for query in queries:
-                    # Get text embedding
-                    text_embedding = model.get_text_embedding(
-                        [query],
-                        use_tensor=False
-                    )
-                    
-                    # Compute similarity
-                    similarity = float(np.dot(audio_embedding[0], text_embedding[0]))
-                    label = get_similarity_label(similarity)
-                    
-                    results.append({
-                        'audio_file': filename,
-                        'query': query,
-                        'similarity': similarity,
-                        'label': label
-                    })
-                
-                print(f"   ✅ Completed\n")
-                
-            except Exception as e:
-                print(f"   ❌ Error: {str(e)}\n")
-                continue
-    
-    # Display results
-    print("=" * 80)
-    print("RESULTS")
-    print("=" * 80)
-    print()
-    
-    # Group results by audio file
-    for audio_file in audio_files:
+    # Process each song (OPTIMIZED: analyze once, compare against all queries)
+    for audio_idx, audio_file in enumerate(audio_files, 1):
         filename = os.path.basename(audio_file)
-        print(f"🎵 {filename}")
-        print("-" * 80)
         
-        file_results = [r for r in results if r['audio_file'] == filename]
-        for result in file_results:
-            score = result['similarity']
-            label = result['label']
-            query = result['query']
+        print(f"\n{'='*80}")
+        print(f"🎵 [{audio_idx}/{len(audio_files)}] {filename}")
+        print(f"{'='*80}")
+        
+        song_start_time = time.time()
+        
+        try:
+            # OPTIMIZED: Pass all queries at once
+            query_results = analyzer.analyze_audio_with_queries(audio_file, queries)
             
-            # Color coding
-            if label == "HIGH":
-                icon = "✅"
-            elif label == "MODERATE":
-                icon = "⚠️ "
-            else:
-                icon = "❌"
-            
-            print(f"  {icon} {label:8s} | {score:6.4f} | \"{query}\"")
-        print()
+            # Store results
+            for result in query_results:
+                results.append({
+                    'audio_file': filename,
+                    'query': result['query'],
+                    'similarity': result['similarity'],
+                    'label': get_similarity_label(result['similarity']),
+                    'max_score': result['max_score'],
+                    'min_score': result['min_score'],
+                    'std_score': result['std_score'],
+                    'num_segments': result['num_segments'],
+                    'duration_sec': result['duration_sec']
+                })
+        except Exception as e:
+            print(f"      ❌ Error processing {filename}: {str(e)}")
+            continue
+        
+        song_elapsed = time.time() - song_start_time
+        print(f"\n⏱️  Total time for this song: {song_elapsed:.2f}s")
     
-    # Save to CSV
+    # Save results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     csv_file = f"results_{timestamp}.csv"
     csv_path = os.path.join(os.path.dirname(__file__), csv_file)
     
+    fieldnames = ['audio_file', 'query', 'similarity', 'label', 'max_score', 'min_score', 
+                  'std_score', 'num_segments', 'duration_sec']
+    
     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['audio_file', 'query', 'similarity', 'label'])
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
     
-    print("=" * 80)
+    print(f"\n{'='*80}")
+    print(f"✅ Analysis complete!")
     print(f"💾 Results saved to: {csv_file}")
-    print("=" * 80)
+    print(f"{'='*80}\n")
 
 
 if __name__ == "__main__":
