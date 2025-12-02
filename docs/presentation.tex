@@ -36,6 +36,7 @@
 \begin{itemize}
     \item Find songs by describing what you hear: "piano melody", "female vocalist"
     \item Compare songs to find similar tracks
+    \item Experiment AI with Copilot Code Assistant
 \end{itemize}
 \end{frame}
 
@@ -92,7 +93,36 @@ CLAP can represent both songs and text descriptions as \textbf{512-dimensional v
 \end{itemize}
 \end{frame}
 
-% Slide 4: Song-to-Song Similarity
+% Slide 5: Query Wording Sensitivity
+\begin{frame}{Query Wording Matters}
+\textbf{Discovery:} Small word changes can dramatically affect results!
+
+\vspace{0.3cm}
+
+\textbf{Example - "Paint it Green" by SUSE Band (female vocalist rock):}
+
+\begin{table}[h]
+\small
+\begin{tabular}{lcc}
+\textbf{Query} & \textbf{Score} & \textbf{Match} \\
+\hline
+"female vocalist" & 0.328 & HIGH \\
+"female voice" & 0.062 & LOW \\
+\hline
+Difference & -0.267 & \textbf{5× worse!} \\
+\end{tabular}
+\end{table}
+
+\vspace{0.3cm}
+
+\textbf{Why?} The model was trained on music descriptions. Professional terminology like "vocalist" appeared more frequently than casual words like "voice".
+
+\vspace{0.2cm}
+
+\textbf{Tip:} Use music industry vocabulary for better results.
+\end{frame}
+
+% Slide 6: Song-to-Song Similarity
 \begin{frame}{Finding Similar Songs}
 \textbf{Bonus Feature:} Beyond text search, we can find which songs sound similar to each other.
 
