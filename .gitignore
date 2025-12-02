@@ -29,3 +29,12 @@ Thumbs.db
 
 # Results files
 results_*.csv
+
+# LaTeX intermediate files (keep only .tex and .pdf)
+docs/*.aux
+docs/*.log
+docs/*.nav
+docs/*.out
+docs/*.vrb
+docs/*.snm
+docs/*.toc
