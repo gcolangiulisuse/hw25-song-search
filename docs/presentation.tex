@@ -1,8 +1,15 @@
 \documentclass{beamer}
 \usetheme{Madrid}
-\usecolortheme{default}
 \usepackage{listings}
 \usepackage{xcolor}
+
+% Define SUSE green color
+\definecolor{susegreen}{RGB}{48,186,120}
+\setbeamercolor{structure}{fg=susegreen}
+\setbeamercolor{palette primary}{bg=susegreen,fg=white}
+\setbeamercolor{palette secondary}{bg=susegreen!80,fg=white}
+\setbeamercolor{palette tertiary}{bg=susegreen!60,fg=white}
+\setbeamercolor{palette quaternary}{bg=susegreen!40,fg=black}
 
 \lstset{
     basicstyle=\ttfamily\tiny,
