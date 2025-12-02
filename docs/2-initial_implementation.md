@@ -142,30 +142,22 @@ Detailed Statistics:
 🎵 [1/7] Aaron Dunn - Minuet - Notebook for Anna Magdalena - Classical.mp3
 ================================================================================
       📊 Analyzing song (loading + 17 queries)... ✅ (18.23s)
-      [1/17] Comparing: "pop music" → 0.2239 ⚠️ M MODERATE (0.15s)
-      [2/17] Comparing: "electric guitar" → 0.1808 ⚠️ M MODERATE (0.12s)
-      [3/17] Comparing: "rock music" → -0.0066 ❌  LOW (0.11s)
+      [1/17] Comparing: "pop music" → 0.2239 ⚠️ MODERATE (0.15s)
+      [2/17] Comparing: "electric guitar" → 0.1808 ⚠️ MODERATE (0.12s)
+      [3/17] Comparing: "rock music" → -0.0066 ❌ LOW (0.11s)
       [4/17] Comparing: "classical music" → 0.3984 ✅  HIGH (0.13s)
       [5/17] Comparing: "piano" → 0.4387 ✅  HIGH (0.14s)
       ...
 
 ⏱️  Total time for this song: 20.45s
 
-================================================================================
-🎵 [2/7] HoliznaCC0 - Dreams Of Lilith - Rock.mp3
-================================================================================
-      📊 Analyzing song (loading + 17 queries)... ✅ (22.15s)
-      [1/17] Comparing: "pop music" → 0.1234 ❄️ LOW (0.16s)
-      [2/17] Comparing: "electric guitar" → 0.4235 🔥 HIGH (0.14s)
-      ...
-
 💾 Results saved to: results_20251202_143022.csv
 ```
 
 **Similarity Thresholds:**
-- `> 0.3` = 🔥 HIGH similarity (strong match)
-- `> 0.15` = ✨ MODERATE similarity (partial match)
-- `≤ 0.15` = ❄️ LOW similarity (no match)
+- `> 0.3` = ✅  HIGH similarity (strong match)
+- `> 0.15` = ⚠️ MODERATE similarity (partial match)
+- `≤ 0.15` = ❌ LOW similarity (no match)
 
 ## Performance Characteristics
 
