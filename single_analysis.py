@@ -57,7 +57,7 @@ Examples:
     print(f"🔍 Analyzing audio against query...\n")
     
     try:
-        results = analyzer.analyze_audio_with_queries(args.audio_file, [args.query])
+        results, _ = analyzer.analyze_audio_with_queries(args.audio_file, [args.query])
         result = results[0]
         
         # Print results

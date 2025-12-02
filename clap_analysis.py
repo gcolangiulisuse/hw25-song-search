@@ -252,15 +252,17 @@ class CLAPAnalyzer:
             queries: List of text query strings
         
         Returns:
-            list of dicts, one per query with:
-                - query: The query text
-                - similarity: Average score across all segments (MAIN METRIC)
-                - max_score: Highest score from any segment
-                - min_score: Lowest score from any segment
-                - std_score: Standard deviation across segments
-                - num_segments: Number of segments analyzed
-                - duration_sec: Audio duration in seconds
-                - analysis_time: Time taken for this query
+            tuple: (results, avg_embedding) where:
+                - results: list of dicts, one per query with:
+                    - query: The query text
+                    - similarity: Average score across all segments (MAIN METRIC)
+                    - max_score: Highest score from any segment
+                    - min_score: Lowest score from any segment
+                    - std_score: Standard deviation across segments
+                    - num_segments: Number of segments analyzed
+                    - duration_sec: Audio duration in seconds
+                    - analysis_time: Time taken for this query
+                - avg_embedding: Average embedding vector for the song (for song-to-song comparison)
         """
         if self.model is None:
             raise RuntimeError("Model not initialized. Call initialize_model() first.")
@@ -281,6 +283,11 @@ class CLAPAnalyzer:
         
         # Convert to numpy array for efficient computation
         audio_embeddings = np.array(audio_embeddings)
+        
+        # Compute average embedding for song-to-song comparison
+        avg_embedding = np.mean(audio_embeddings, axis=0)
+        # Normalize to unit length (for cosine similarity via dot product)
+        avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
         
         load_elapsed = time.time() - total_start
         print(f" ✅ ({load_elapsed:.2f}s)")
@@ -319,7 +326,7 @@ class CLAPAnalyzer:
                 'analysis_time': query_elapsed
             })
         
-        return results
+        return results, avg_embedding
 
 
 def get_similarity_label(score):

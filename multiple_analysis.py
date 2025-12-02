@@ -20,8 +20,9 @@ warnings.filterwarnings('ignore')
 import glob
 import csv
 import time
+import numpy as np
 from datetime import datetime
-from clap_analysis import CLAPAnalyzer, get_similarity_label
+from clap_analysis import CLAPAnalyzer, get_similarity_label, get_similarity_icon
 
 
 def load_queries(query_file):
@@ -49,6 +50,39 @@ def load_audio_files(songs_dir):
     return sorted(audio_files)
 
 
+def compute_song_similarities(song_embeddings, song_names):
+    """
+    Compute pairwise similarities between all songs.
+    
+    Args:
+        song_embeddings: dict mapping song filename to its average embedding
+        song_names: list of song filenames
+    
+    Returns:
+        list of dicts with song1, song2, similarity
+    """
+    similarities = []
+    
+    for i in range(len(song_names)):
+        for j in range(i + 1, len(song_names)):
+            song1 = song_names[i]
+            song2 = song_names[j]
+            
+            # Compute cosine similarity (dot product of normalized embeddings)
+            sim = float(np.dot(song_embeddings[song1], song_embeddings[song2]))
+            
+            similarities.append({
+                'song1': song1,
+                'song2': song2,
+                'similarity': sim
+            })
+    
+    # Sort by similarity (highest first)
+    similarities.sort(key=lambda x: x['similarity'], reverse=True)
+    
+    return similarities
+
+
 def main():
     """Main orchestration function."""
     
@@ -69,6 +103,7 @@ def main():
     analyzer.initialize_model()
     
     results = []
+    song_embeddings = {}  # Store average embedding for each song
     
     # Process each song (OPTIMIZED: analyze once, compare against all queries)
     for audio_idx, audio_file in enumerate(audio_files, 1):
@@ -81,8 +116,11 @@ def main():
         song_start_time = time.time()
         
         try:
-            # OPTIMIZED: Pass all queries at once
-            query_results = analyzer.analyze_audio_with_queries(audio_file, queries)
+            # OPTIMIZED: Pass all queries at once (also returns embeddings)
+            query_results, avg_embedding = analyzer.analyze_audio_with_queries(audio_file, queries)
+            
+            # Store song's average embedding for similarity comparison
+            song_embeddings[filename] = avg_embedding
             
             # Store results
             for result in query_results:
@@ -116,6 +154,21 @@ def main():
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
+    
+    # Compute song-to-song similarities
+    if len(song_embeddings) > 1:
+        print(f"\n{'='*80}")
+        print(f"🎵 🎵 Song Similarities")
+        print(f"{'='*80}")
+        
+        song_sims = compute_song_similarities(song_embeddings, list(song_embeddings.keys()))
+        
+        # Display top 10 most similar pairs
+        print(f"\nTop {min(10, len(song_sims))} most similar song pairs:\n")
+        for idx, sim in enumerate(song_sims[:10], 1):
+            icon = get_similarity_icon(sim['similarity'])
+            print(f"{idx:2d}. {sim['similarity']:.4f} {icon} {sim['song1']}")
+            print(f"                   ↔️  {sim['song2']}")
     
     print(f"\n{'='*80}")
     print(f"✅ Analysis complete!")
