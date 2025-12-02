@@ -13,45 +13,58 @@
 }
 
 \title{Song Search using CLAP}
-\subtitle{HW 25}
-\date{December 2, 2025}
+\subtitle{SUSE Hack Week 25}
+\date{}
 
 \begin{document}
 
 % Title Slide
 \begin{frame}
 \titlepage
+\vspace{-0.5cm}
+\begin{center}
+\includegraphics[width=0.7\textwidth]{../HW25-SONG-SEARCH.png}
+\end{center}
 \end{frame}
 
-% Slide 1: CLAP Overview
+% Slide 2: Goals
+\begin{frame}{Goals}
+\textbf{Search music using natural language descriptions}
+
+\vspace{0.6cm}
+
+\begin{itemize}
+    \item Find songs by describing what you hear: "piano melody", "female vocalist"
+    \item Compare songs to find similar tracks
+\end{itemize}
+\end{frame}
+
+% Slide 3: CLAP Overview
 \begin{frame}{CLAP Overview}
-\textbf{CLAP} (Contrastive Language-Audio Pretraining) - Audio-text embedding framework
+\textbf{CLAP} (Contrastive Language-Audio Pretraining) - Bridging audio and language
+
+\vspace{0.4cm}
+
+\textbf{Core Concept:}
+
+CLAP can represent both songs and text descriptions as \textbf{512-dimensional vectors} in the same mathematical space. This enables searching for music using natural language queries.
 
 \vspace{0.3cm}
 
+\textbf{How it works:}
 \begin{itemize}
-    \item \textbf{Architecture:} HTSAT audio encoder + BERT text encoder
-    \item \textbf{Output:} 512-dimensional aligned embeddings
-    \item \textbf{Capability:} Zero-shot audio-text semantic search
-    \item \textbf{Selected Model:} \texttt{music\_audioset\_epoch\_15\_esc\_90.14.pt}
-    \begin{itemize}
-        \item 71\% GTZAN accuracy (best for music)
-        \item 2.35 GB, trained on \textasciitilde{}4M samples
-    \end{itemize}
+    \item A song becomes a 512-number vector capturing its audio characteristics
+    \item A text query like "piano music" also becomes a 512-number vector
+    \item Vectors that point in similar directions represent similar content
+    \item We measure similarity to find songs matching the description
 \end{itemize}
 
 \vspace{0.3cm}
 
-\textbf{Workflow:}
-\begin{enumerate}
-    \item Load audio at 48kHz
-    \item Generate audio \& text embeddings via CLAP
-    \item Compute cosine similarity (dot product)
-    \item Rank by similarity score (-1 to +1)
-\end{enumerate}
+\textbf{Model:} \texttt{music\_audioset\_epoch\_15\_esc\_90.14.pt} - Specialized for music (71\% genre accuracy, trained on \textasciitilde{}4M samples)
 \end{frame}
 
-% Slide 2: Implementation
+% Slide 4: Implementation
 \begin{frame}{Implementation}
 \textbf{Two Modes:}
 
@@ -72,159 +85,122 @@
 
 \vspace{0.3cm}
 
-\textbf{Similarity Thresholds:}
+\textbf{Cosine Similarity Scores:}
 \begin{itemize}
-    \item $> 0.3$ = HIGH (strong match)
-    \item $> 0.15$ = MODERATE (partial match)
-    \item $\leq 0.15$ = LOW (no match)
+    \item Range: $-1$ (opposite) to $+1$ (identical)
+    \item Thresholds: $> 0.3$ = HIGH, $> 0.15$ = MODERATE, $\leq 0.15$ = LOW
 \end{itemize}
 \end{frame}
 
-% Slide 3: Overlapping Segments & Optimization
-\begin{frame}[fragile]{Overlapping Segments \& Optimization}
-\textbf{Problem:} CLAP processes max 10s per inference
-
-\vspace{0.2cm}
-
-\textbf{Solution:} Overlapping segment analysis
-\begin{itemize}
-    \item 10s segments with 50\% overlap (5s hop)
-    \item Ensures full song coverage
-    \item Average score across all segments
-\end{itemize}
-
-\vspace{0.2cm}
-
-\textbf{Performance Optimization:}
-\begin{lstlisting}
-# BEFORE: 17x redundant work
-for song in songs:
-    for query in queries:
-        analyze(song, query)  # 270s per song
-
-# AFTER: Analyze once, compare many
-for song in songs:
-    embeddings = get_embeddings(song)  # 18s
-    for query in queries:
-        compare(embeddings, query)  # 0.15s each
-\end{lstlisting}
-
-\textbf{Result:} \textasciitilde{}15-17x speedup (270s → 20s per song)
-\end{frame}
-
-% Slide 4: Determinism
-\begin{frame}[fragile]{Deterministic Results}
-\textbf{Goal:} Reproducible scores across runs
-
-\vspace{0.3cm}
-
-\textbf{Implementation:}
-\begin{lstlisting}
-# Random seeds
-random.seed(42)
-np.random.seed(42)
-torch.manual_seed(42)
-
-# PyTorch determinism
-torch.backends.cudnn.deterministic = True
-torch.use_deterministic_algorithms(True)
-
-# Environment variables
-os.environ['PYTHONHASHSEED'] = '42'
-os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-\end{lstlisting}
-
-\vspace{0.3cm}
-
-\textbf{Validation:} Exact same scores across multiple runs (verified)
-\end{frame}
-
-% Slide 5: Query Wording Sensitivity
-\begin{frame}{Query Wording Sensitivity}
-\textbf{Finding:} Exact wording dramatically affects results
-
-\vspace{0.3cm}
-
-\textbf{Example - "vocalist" vs "voice":}
-
-\begin{table}[h]
-\small
-\begin{tabular}{lcc}
-\textbf{Query} & \textbf{Score} & \textbf{Label} \\
-\hline
-female vocalist & 0.328 & HIGH \\
-female voice & 0.062 & LOW \\
-\hline
-Difference & -0.267 & \textbf{5× lower!} \\
-\end{tabular}
-\end{table}
-
-\vspace{0.3cm}
-
-\textbf{Best Practices:}
-\begin{itemize}
-    \item Use music industry terms: "vocalist" not "voice"
-    \item Keep queries simple: avoid complex compounds
-    \item Test synonyms to find best wording
-    \item Genre terms work well: "rock music", "classical music"
-\end{itemize}
-\end{frame}
-
-% Slide 6: Song-to-Song Similarity
-\begin{frame}[fragile]{Song-to-Song Similarity}
-\textbf{Feature:} Compare songs to each other using audio embeddings
+% Slide 4: Song-to-Song Similarity
+\begin{frame}{Finding Similar Songs}
+\textbf{Bonus Feature:} Beyond text search, we can find which songs sound similar to each other.
 
 \vspace{0.3cm}
 
 \textbf{How It Works:}
-\begin{lstlisting}
-# During analysis: store average embedding per song
-avg_embedding = np.mean(segment_embeddings, axis=0)
-avg_embedding /= np.linalg.norm(avg_embedding)  # normalize
-song_embeddings[filename] = avg_embedding
-
-# After all songs: compute pairwise similarities
-for song1, song2 in all_pairs:
-    similarity = np.dot(song_embeddings[song1], 
-                       song_embeddings[song2])
-\end{lstlisting}
+\begin{itemize}
+    \item Each song gets its own 512-dimensional vector representation
+    \item We compare these vectors between all song pairs
+    \item Songs with similar vectors have similar audio characteristics
+    \item Same similarity metric as text queries
+\end{itemize}
 
 \vspace{0.3cm}
 
-\textbf{Key Points:}
+\textbf{Advantage:} No additional processing needed!
 \begin{itemize}
-    \item Same metric as text queries (cosine similarity)
-    \item No re-analysis needed (uses cached embeddings)
-    \item Negligible computation (\textasciitilde{}0.001s for 10 songs)
+    \item Song vectors are already computed during text query analysis
+    \item Comparison is instant (\textasciitilde{}0.001 seconds for 10 songs)
+    \item Can help discover related songs in your collection
+\end{itemize}
+
+\vspace{0.3cm}
+
+\textbf{Use Cases:}
+\begin{itemize}
+    \item Find songs with similar instrumentation or mood
+    \item Discover patterns in your music collection
+    \item Create automatic playlists based on audio similarity
 \end{itemize}
 \end{frame}
 
-% Slide 7: AI Support
-\begin{frame}{AI Support in Development}
-\textbf{GitHub Copilot (Claude Sonnet 4.5) contributions:}
+% Slide 7: AI Support - What Went Well
+\begin{frame}{AI Support in Development - What Went Well}
+\textbf{Project developed with GitHub Copilot (Claude Sonnet 4.5)}
 
-\vspace{0.3cm}
-
+\textbf{1. Research \& Model Selection}
 \begin{itemize}
-    \item \textbf{Determinism fix:} Comprehensive seed initialization (1 iteration)
-    \item \textbf{Performance:} 15x speedup via embedding caching (2 iterations)
-    \item \textbf{Architecture:} Clean library/CLI separation (1 iteration)
-    \item \textbf{Query analysis:} Discovered "vocalist" vs "voice" pattern
-    \item \textbf{Documentation:} Created all technical docs
+    \item Compared CLAP models → selected \texttt{music\_audioset} (71\% GTZAN accuracy)
+    \item Read CLAP paper, explained architecture accessibly
+\end{itemize}
+
+\textbf{2. Code Analysis \& Technical Discovery}
+\begin{itemize}
+    \item Examined checkpoint: model lacks fusion, max 10s segments
+    \item Designed overlapping segment solution
+\end{itemize}
+
+\textbf{3. Data Analysis \& Documentation}
+\begin{itemize}
+    \item Found "vocalist" vs "voice" pattern (5x difference in results)
+    \item Generated all technical docs with examples
+\end{itemize}
+\end{frame}
+
+% Slide 8: AI Support - What Needs Improvement
+\begin{frame}{AI Support in Development - What Needs Improvement}
+\textbf{1. Unrequested Code Changes}
+\begin{itemize}
+    \item Single-file CLI disappeared, score icons changed without asking
+    \item \textbf{Problem:} Full file rewrites hide unintended changes
+    \item \textbf{Lesson:} Always review diffs carefully
+\end{itemize}
+
+\textbf{2. First Solution $\neq$ Best Solution}
+\begin{itemize}
+    \item \textbf{Performance:} Song analyzed per query → challenged → \textbf{15x faster}
+    \item \textbf{Threading:} Single-threaded → asked "faster?" → multiprocessing
+\end{itemize}
+
+\textbf{Key Lesson:} Working $\neq$ optimal. Challenge AI with domain knowledge.
+\end{frame}
+
+% Slide 9: Best Practices for AI Collaboration
+\begin{frame}{Best Practices for AI-Assisted Development}
+\textbf{Do's:}
+\begin{itemize}
+    \item Ask AI to research and compare options (models, approaches)
+    \item Request code analysis to understand existing implementations
+    \item Share actual data/errors for pattern recognition
+    \item Challenge solutions: "Can this be faster?" "Is there a better way?"
+    \item Request documentation with examples from your project
 \end{itemize}
 
 \vspace{0.3cm}
 
-\textbf{Success Pattern:}
+\textbf{Don'ts:}
 \begin{itemize}
-    \item Clear, specific requests → Single-iteration solutions
-    \item Performance challenges → Iterative refinement
-    \item Example-based communication → Faster results
+    \item Don't accept first working solution as optimal
+    \item Don't let AI rewrite entire files without showing diffs
+    \item Don't assume AI made only requested changes - review carefully
+    \item Don't trust performance without testing alternatives
 \end{itemize}
 
 \vspace{0.3cm}
 
-\textbf{Key Takeaway:} Most requests resolved in 1 iteration when clearly specified
+\textbf{Bottom line:} AI is a powerful assistant for research, analysis, and documentation. For code: it provides a working starting point, but optimization requires your expertise and critical thinking.
+\end{frame}
+
+% Slide 9: References
+\begin{frame}{References}
+\begin{itemize}
+    \item \textbf{CLAP:} \url{https://github.com/LAION-AI/CLAP} - The main model being researched
+    \item \textbf{Hugging Face:} \url{https://huggingface.co/docs/transformers/model_doc/clap} - Pre-trained models for CLAP
+    \item \textbf{Free Music Archive:} \url{https://freemusicarchive.org/} - Creative Commons songs for testing
+    \item \textbf{SUSE Hack Week 25 Project:} \url{https://hackweek.opensuse.org/25/projects/clap-machine-learning-to-search-song-starting-from-text} - Project page
+    \item \textbf{Project Repository:} \url{https://github.com/gcolangiulisuse/hw25-song-search} - GitHub repo of the project
+\end{itemize}
 \end{frame}
 
 \end{document}
