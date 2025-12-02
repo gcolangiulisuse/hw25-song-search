@@ -197,24 +197,50 @@ Result: 15x faster
 
 ---
 
-## Lessons Learned
+## Lessons Learned (For Users Working with AI)
 
-### What Worked Well
-1. **Show, don't tell** - Code examples > verbal explanations
-2. **Data-driven insights** - Real CSV results > theoretical analysis
-3. **Iterative refinement** - Each iteration built on previous understanding
-4. **Proactive documentation** - Created docs without explicit request
+### What Works Best When Requesting AI Help
 
-### What Required Multiple Iterations
-1. Performance optimization - needed to rethink algorithm fundamentally
-2. UX polish - multiple small improvements over time
-3. Understanding user's exact intent for edge cases
+1. **Be Specific with Examples**
+   - ✅ "Why does 'female vocalist' score 0.328 but 'female voice' scores 0.062?"
+   - ❌ "Why are my scores weird?"
+   - **Result:** Specific questions with data → immediate analysis
 
-### AI's Strengths in This Project
-- Analyzing model internals (checkpoint structure, architecture)
-- Pattern recognition across dataset (query wording effects)
-- Algorithm optimization (caching strategy)
-- Creating structured documentation
+2. **Request Concise, Example-Based Output**
+   - User repeatedly asked: "BE CONCISE AND VERY EXAMPLE BASED!"
+   - AI adapted: More tables/code, fewer explanations
+   - **Result:** Faster iteration, clearer documentation
+
+3. **Allow Iterative Refinement for Complex Problems**
+   - Performance optimization took 2 tries to find optimal solution
+   - UX improvements refined over 3 iterations
+   - **Result:** Better outcomes than demanding perfect first attempt
+
+4. **Show AI Your Data/Errors**
+   - Sharing CSV results → AI found patterns user missed
+   - Showing actual output → AI diagnosed spacing issues immediately
+   - **Result:** Faster debugging, data-driven insights
+
+### When to Push Back on AI Suggestions
+
+1. **If AI over-explains instead of showing code**
+   - User pushed for: Code snippets > verbal descriptions
+   - AI learned to show diffs and examples first
+
+2. **If solution feels overcomplicated**
+   - Initial parallel processing was good, but caching was breakthrough
+   - **Lesson:** Sometimes "still slow" feedback leads to better approach
+
+3. **If documentation is too verbose**
+   - User enforced: "CONCISE" requirement throughout
+   - AI adjusted style to match user preference
+
+### Communication Patterns That Worked
+
+- **"Create X in /docs"** → Clear file creation requests
+- **"Analyze the difference"** → AI searches data and reports findings
+- **"PLEASE BE CONCISE AND VERY EXAMPLE BASED!"** → Sets style expectations
+- **"Why you don't do inline change?"** → Direct feedback improves AI behavior
 
 ---
 
