@@ -21,3 +21,4 @@ For full project details please visit the official Hackweek page:
 - 🎯 **[Song Similarity](docs/7-song_similarity.md)** - Song-to-song comparison using audio embeddings
 - 🤖 **[AI Support in Development](docs/6-ai_support.md)** - GitHub Copilot usage and lessons learned
 - 📊 **[LaTeX Presentation](docs/8-latex_presentation.md)** - Beamer presentation documentation
+- 📄 **[Full Output Example](docs/9-full_output_example.md)** - Complete analysis output with all segments and scores

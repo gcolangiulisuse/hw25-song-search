@@ -1,5 +1,5 @@
-colangiuli@Guidos-MacBook-Pro hw25-song-search % source venv/bin/activate
-(venv) gcolangiuli@Guidos-MacBook-Pro hw25-song-search % python multiple_analysis.py
+```bash
+> python multiple_analysis.py
 🔧 Initializing CLAP model...
    CPU cores: 12 | Workers: 12
    Segments: 10s with 50% overlap
@@ -571,5 +571,4 @@ Top 10 most similar song pairs:
 ✅ Analysis complete!
 💾 Query results saved to: results_20251203_125627.csv
 ================================================================================
-
-(venv) gcolangiuli@Guidos-MacBook-Pro hw25-song-search % 
+```
