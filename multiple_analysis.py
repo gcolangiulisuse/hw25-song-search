@@ -169,10 +169,27 @@ def main():
             icon = get_similarity_icon(sim['similarity'])
             print(f"{idx:2d}. {sim['similarity']:.4f} {icon} {sim['song1']}")
             print(f"                   ↔️  {sim['song2']}")
+        
+        # Save all song similarities to CSV
+        similarity_csv = f"results_similarity_{timestamp}.csv"
+        similarity_path = os.path.join(os.path.dirname(__file__), similarity_csv)
+        
+        with open(similarity_path, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=['song1', 'song2', 'similarity', 'label'])
+            writer.writeheader()
+            for sim in song_sims:
+                writer.writerow({
+                    'song1': sim['song1'],
+                    'song2': sim['song2'],
+                    'similarity': sim['similarity'],
+                    'label': get_similarity_label(sim['similarity'])
+                })
+        
+        print(f"💾 Song similarities saved to: {similarity_csv}")
     
     print(f"\n{'='*80}")
     print(f"✅ Analysis complete!")
-    print(f"💾 Results saved to: {csv_file}")
+    print(f"💾 Query results saved to: {csv_file}")
     print(f"{'='*80}\n")
 
 

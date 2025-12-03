@@ -100,65 +100,102 @@ CLAP can represent both songs and text descriptions as \textbf{512-dimensional v
 \end{itemize}
 \end{frame}
 
-% Slide 5: Query Wording Sensitivity
-\begin{frame}{Query Wording Matters}
-\textbf{Discovery:} Small word changes can dramatically affect results!
-
-\vspace{0.3cm}
-
-\textbf{Example - "Paint it Green" by SUSE Band (female vocalist rock):}
-
-\begin{table}[h]
-\small
-\begin{tabular}{lcc}
-\textbf{Query} & \textbf{Score} & \textbf{Match} \\
-\hline
-"female vocalist" & 0.328 & HIGH \\
-"female voice" & 0.062 & LOW \\
-\hline
-Difference & -0.267 & \textbf{5× worse!} \\
-\end{tabular}
-\end{table}
-
-\vspace{0.3cm}
-
-\textbf{Why?} The model was trained on music descriptions. Professional terminology like "vocalist" appeared more frequently than casual words like "voice".
+% Slide 5: Output Example - Classical
+\begin{frame}{Output Example - Classical}
+\textbf{Song:} Aaron Dunn - Minuet (Classical Piano)
 
 \vspace{0.2cm}
 
-\textbf{Tip:} Use music industry vocabulary for better results.
+\begin{table}[h]
+\tiny
+\begin{tabular}{p{3.2cm}|p{3.2cm}|p{3.2cm}}
+\textbf{HIGH ($> 0.3$)} & \textbf{MODERATE ($> 0.15$)} & \textbf{LOW ($\leq 0.15$)} \\
+\hline
+\textbf{0.41} piano & \textbf{0.29} chill & \textbf{0.15} 70s \\
+\textbf{0.40} \textcolor{susegreen}{classical instrumental song with piano} & \textbf{0.28} chillout & \textbf{0.14} choir \\
+\textbf{0.38} classical music & \textbf{0.27} sad & \textbf{0.14} beautiful \\
+\textbf{0.37} instrumental & \textbf{0.26} jazz & \textbf{0.14} danceable \\
+\textbf{0.33} instrumental music & \textbf{0.25} acoustic & \textbf{0.12} pop music wit bass guitar \\
+\textbf{} & \textbf{0.23} acoustic guitar & \textbf{0.12} funk \\
+\textbf{} & \textbf{0.22} pop & \textbf{0.12} bass guitar \\
+\textbf{} & \textbf{0.21} folk & \textbf{0.11} soul \\
+\textbf{} & \textbf{0.21} happy & \textbf{0.11} rock \\
+\end{tabular}
+\end{table}
+
+\vspace{0.2cm}
+
+\small
+\textbf{Observation:} Piano and classical-related queries score highest. Chill/mellow descriptors moderate. Rock and modern era queries score low.
+
+\vspace{0.2cm}
+
+\textbf{Tip:} \textcolor{susegreen}{Detailed, specific queries} combining multiple descriptors (genre + instrument + style) yield excellent results!
 \end{frame}
 
-% Slide 6: Song-to-Song Similarity
+% Slide 6: Output Example - Rock
+\begin{frame}{Output Example - Rock}
+\textbf{Song:} SUSE Band - Paint it Green (Rock)
+
+\vspace{0.2cm}
+
+\begin{table}[h]
+\tiny
+\begin{tabular}{p{3.2cm}|p{3.2cm}|p{3.2cm}}
+\textbf{HIGH ($> 0.3$)} & \textbf{MODERATE ($> 0.15$)} & \textbf{LOW ($\leq 0.15$)} \\
+\hline
+\textbf{0.42} indie rock & \textbf{0.28} hard rock & \textbf{0.14} heavy metal \\
+\textbf{0.41} alternative rock & \textbf{0.28} folk & \textbf{0.14} dance \\
+\textbf{0.40} classic rock & \textbf{0.26} punk & \textbf{0.13} soul \\
+\textbf{0.37} Progressive rock & \textbf{0.25} 80s & \textbf{0.13} instrumental \\
+\textbf{0.37} indie pop & \textbf{0.25} funk & \textbf{0.13} acoustic guitar \\
+\textbf{0.36} rock & \textbf{0.25}90s & \textbf{0.13} singing \\
+\textbf{0.33} \textcolor{red}{female vocalist} & \textbf{0.24}60s & \textbf{0.12} bass guitar \\
+\textbf{0.32} rock music & \textbf{0.24} metal & \textbf{0.12} guitar \\
+\textbf{0.31} blues & \textbf{0.23} Mellow & \textbf{0.06} \textcolor{red}{female voice} \\
+\end{tabular}
+\end{table}
+
+\vspace{0.2cm}
+
+\small
+\textbf{Observation:} Rock subgenres (indie, alternative, classic) score highest. Generic instrument queries score low.
+
+\vspace{0.2cm}
+
+\textbf{Query Wording Matters:} Notice \textcolor{red}{"female vocalist"} (0.33, HIGH) vs \textcolor{red}{"female voice"} (0.06, LOW) - 5× difference! Use music industry vocabulary for better results.
+\end{frame}
+
+% Slide 7: Song-to-Song Similarity
 \begin{frame}{Finding Similar Songs}
 \textbf{Bonus Feature:} Beyond text search, we can find which songs sound similar to each other.
 
 \vspace{0.3cm}
 
-\textbf{How It Works:}
-\begin{itemize}
-    \item Each song gets its own 512-dimensional vector representation
-    \item We compare these vectors between all song pairs
-    \item Songs with similar vectors have similar audio characteristics
-    \item Same similarity metric as text queries
-\end{itemize}
+\textbf{Example:} Finding songs similar to SUSE Band - Paint it Green (Rock)
 
-\vspace{0.3cm}
-
-\textbf{Advantage:} No additional processing needed!
-\begin{itemize}
-    \item Song vectors are already computed during text query analysis
-    \item Comparison is instant (\textasciitilde{}0.001 seconds for 10 songs)
-    \item Can help discover related songs in your collection
-\end{itemize}
+\begin{table}[h]
+\small
+\begin{tabular}{lc}
+\textbf{Song} & \textbf{Similarity} \\
+\hline
+HoliznaCC0 - Dreams Of Lilith (Rock) & 0.72 \\
+Jenna Jay - Someone Real (Pop) & 0.56 \\
+Zane Little - Always and Forever (Pop) & 0.47 \\
+SUSE Band - SUSE Yes Please (Pop) & 0.43 \\
+SUSE Band - Can't Stop The SUSE (Pop) & 0.39 \\
+Aaron Dunn - Minuet (Classical Piano) & 0.18 \\
+\hline
+\end{tabular}
+\end{table}
 
 \vspace{0.3cm}
 
 \textbf{Use Cases:}
 \begin{itemize}
     \item Find songs with similar instrumentation or mood
-    \item Discover patterns in your music collection
     \item Create automatic playlists based on audio similarity
+    \item Discover patterns in your music collection
 \end{itemize}
 \end{frame}
 
