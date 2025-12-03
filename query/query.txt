@@ -64,3 +64,6 @@ sad
 House
 happy
 danceable
+banjo
+Ukulele
+Mandolin
