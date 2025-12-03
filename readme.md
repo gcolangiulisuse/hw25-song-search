@@ -16,3 +16,8 @@ For full project details please visit the official Hackweek page:
 
 - 📋 **[Preliminary Analysis](docs/1-preliminary_analysis.md)** - CLAP introduction, models comparison, and workflow
 - 🔧 **[Initial Implementation](docs/2-initial_implementation.md)** - Architecture, usage examples, and expected output
+- 🎵 **[Multiple Segment Analysis](docs/3-multiple_segment.md)** - Overlapping segments implementation for full song coverage
+- 📝 **[Query Wording Matters](docs/4-query_wording.md)** - Impact of terminology on search results
+- 🎯 **[Song Similarity](docs/7-song_similarity.md)** - Song-to-song comparison using audio embeddings
+- 🤖 **[AI Support in Development](docs/6-ai_support.md)** - GitHub Copilot usage and lessons learned
+- 📊 **[LaTeX Presentation](docs/8-latex_presentation.md)** - Beamer presentation documentation
