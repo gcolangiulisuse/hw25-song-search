@@ -1,7 +1,5 @@
 # CLAP Preliminary Analysis
 
-**Date:** 1 December 2025
-
 ## CLAP Introduction
 
 **CLAP** (Contrastive Language-Audio Pretraining) is an audio-text embedding framework analogous to CLIP but for audio-language alignment. It creates aligned 512-dimensional embeddings for both audio and text, enabling natural language search over audio content.

@@ -1,7 +1,5 @@
 # AI Support in Development
 
-**Date:** 2 December 2025
-
 ## Overview
 
 This document shows how AI assistance (GitHub Copilot with Claude Sonnet 4.5) contributed to the hw25-song-search project, including successful patterns and iterative refinements.

@@ -1,7 +1,5 @@
 # Song-to-Song Similarity
 
-**Date:** 2 December 2025
-
 ## Overview
 
 After analyzing songs against text queries, the system computes similarities between songs themselves using their audio embeddings.

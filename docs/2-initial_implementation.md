@@ -1,8 +1,5 @@
 # Initial Implementation
 
-**Date:** 1 December 2025  
-**Updated:** 2 December 2025
-
 ## Approach
 
 Two operational modes:

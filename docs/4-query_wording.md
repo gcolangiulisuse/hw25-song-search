@@ -1,7 +1,5 @@
 # Query Wording Sensitivity Analysis
 
-**Date:** 2 December 2025
-
 ## Problem: Word Choice Matters
 
 CLAP's text encoder is **highly sensitive to exact wording**. Synonyms and similar phrases can produce dramatically different similarity scores, even when describing the same musical characteristic.

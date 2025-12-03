@@ -1,7 +1,5 @@
 # LaTeX Presentation Compilation
 
-**Date:** 2 December 2025
-
 ## Prerequisites
 
 Install BasicTeX (lightweight LaTeX distribution for macOS):
@@ -32,10 +30,9 @@ cd docs
 pdflatex presentation.tex
 ```
 
-Or from project root:
+Or specify the full path to pdflatex if needed:
 
 ```bash
-cd "/Users/gcolangiuli/Library/CloudStorage/GoogleDrive-guido.colangiuli@suse.com/My Drive/hw25-song-search/docs"
 /Library/TeX/texbin/pdflatex presentation.tex
 ```
 
