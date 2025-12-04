@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """
-Multiple Audio Analysis Orchestrator
+Multiple Audio Analysis Orchestrator (Offline Tool - NOT used by web interface)
 Simple orchestrator that calls clap_analysis for each song/query combination.
 All progress output is handled by clap_analysis.py.
 OPTIMIZED: Analyzes each song once, then compares against all queries.
+
+NOTE: This is a standalone CLI tool for offline batch analysis.
+The web interface uses backend/main.py and backend/analysis.py instead.
 """
 
 import os

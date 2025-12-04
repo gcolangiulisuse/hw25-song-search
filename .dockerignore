@@ -1,0 +1,32 @@
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Ignore virtual environment
+venv/
+env/
+
+# Ignore data directories
+data/db/*.db
+data/db/*.db-journal
+
+# Ignore models (large files)
+models/*.pt
+
+# Ignore results CSV files
+results_*.csv
+
+# Ignore IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Ignore OS files
+.DS_Store
+Thumbs.db
+
+# Ignore Docker volumes
+data/

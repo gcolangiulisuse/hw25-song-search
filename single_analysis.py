@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
-Single Audio Analysis CLI
+Single Audio Analysis CLI (Offline Tool - NOT used by web interface)
 Analyzes one audio file against one text query using CLAP.
+
+NOTE: This is a standalone CLI tool for offline analysis.
+The web interface uses backend/analysis.py instead.
 """
 
 import os

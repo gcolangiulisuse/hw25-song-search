@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>Song Search</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <script src="https://unpkg.com/alpinejs@3.13.5/dist/cdn.min.js" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v=2">
+</head>
+<body x-data="app()" x-init="init()">
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <h1>SUSE Hack week 25 -  Song Search</h1>
+            <p class="subtitle">Music Search & Discovery</p>
+        </header>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat">
+                <span class="stat-label">Songs Analyzed:</span>
+                <span class="stat-value" x-text="stats.total_songs">0</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Music Library:</span>
+                <span class="stat-value" x-text="formatDuration(stats.total_duration_sec)">0h</span>
+            </div>
+            <div class="stat">
+                <span class="stat-label">Queries:</span>
+                <span class="stat-value" x-text="stats.total_queries">0</span>
+            </div>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="tabs">
+            <button @click="switchTab('analysis')" 
+                    :class="{'active': currentTab === 'analysis'}">
+                🔄 Analysis
+            </button>
+            <button @click="switchTab('text-search')" 
+                    :class="{'active': currentTab === 'text-search'}">
+                🔍 Text Search
+            </button>
+            <button @click="switchTab('similarity')" 
+                    :class="{'active': currentTab === 'similarity'}">
+                🎼 Similar Songs
+            </button>
+        </nav>
+
+        <!-- Config Tab -->
+        <div x-show="currentTab === 'config'" class="tab-content">
+            <h2>Configuration</h2>
+            <div class="form-group">
+                <label>Songs Directory Path:</label>
+                <input type="text" x-model="songsPath" placeholder="/app/data/songs">
+                <button @click="updateConfig()" class="btn-primary">Save Configuration</button>
+            </div>
+            <div x-show="configMessage" class="message" :class="configSuccess ? 'success' : 'error'" x-text="configMessage"></div>
+        </div>
+
+        <!-- Analysis Tab -->
+        <div x-show="currentTab === 'analysis'" class="tab-content">
+            <h2>Analyze Songs</h2>
+            
+            <div x-show="!songsPath" class="empty-state">
+                <p>⚠️ Songs directory not configured!</p>
+                <p>Please go to the <strong>Config</strong> tab and set your songs directory first.</p>
+            </div>
+            
+            <div x-show="songsPath">
+                <p>Scan and analyze all songs in the configured directory.</p>
+                
+                <button @click="startAnalysis()" 
+                        class="btn-primary" 
+                        :disabled="analysisState.is_running">
+                    <span x-show="!analysisState.is_running">▶️ Start Analysis</span>
+                    <span x-show="analysisState.is_running">⏳ Analyzing...</span>
+                </button>
+            </div>
+
+            <!-- Progress Display -->
+            <div x-show="analysisState.is_running || analysisState.status_message" class="progress-container">
+                <div class="progress-info">
+                    <div>
+                        <strong>Progress:</strong> 
+                        <span x-text="analysisState.current_idx">0</span> / 
+                        <span x-text="analysisState.total_songs">0</span> songs
+                        (<span x-text="analysisState.progress_pct.toFixed(1)">0</span>%)
+                    </div>
+                    <div x-show="analysisState.current_song">
+                        <strong>Current:</strong> <span x-text="analysisState.current_song"></span>
+                    </div>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" :style="`width: ${analysisState.progress_pct}%`"></div>
+                </div>
+                <div class="status-message" x-text="analysisState.status_message"></div>
+            </div>
+        </div>
+
+        <!-- Text Search Tab -->
+        <div x-show="currentTab === 'text-search'" class="tab-content">
+            <h2>Text Search</h2>
+            
+            <div x-show="stats.total_songs === 0" class="empty-state">
+                <p>⚠️ No songs analyzed yet!</p>
+                <p>Please go to the <strong>Analysis</strong> tab and analyze your music library first.</p>
+            </div>
+            
+            <div x-show="stats.total_songs > 0">
+                <p>Search songs using natural language descriptions.</p>
+                
+                <div class="form-group">
+                    <input type="text" 
+                           x-model="textQuery" 
+                           @keyup.enter="searchByText()"
+                           placeholder="e.g., 'energetic rock guitar', 'calm piano music'">
+                    <button @click="searchByText()" class="btn-primary" :disabled="searching">
+                        <span x-show="!searching">🔍 Search</span>
+                        <span x-show="searching">⏳ Searching...</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div x-show="textResults.length > 0" class="results">
+                <!-- Audio Player -->
+                <div x-show="currentlyPlaying !== null" class="audio-player-container">
+                    <div class="now-playing-info">
+                        <span x-text="getCurrentSongInfo()"></span>
+                    </div>
+                    <audio id="audioPlayer" 
+                           controls 
+                           @ended="currentlyPlaying = null"
+                           class="audio-player">
+                    </audio>
+                </div>
+
+                <h3>Top <span x-text="textResults.length"></span> Results</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Artist</th>
+                            <th>Title</th>
+                            <th>Score</th>
+                            <th>Play</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(result, index) in textResults" :key="result.id">
+                            <tr>
+                                <td x-text="index + 1"></td>
+                                <td x-text="result.artist || 'Unknown'"></td>
+                                <td x-text="result.title || result.filename"></td>
+                                <td>
+                                    <span class="score" x-text="result.similarity.toFixed(4)"></span>
+                                    <span class="score-bar" :style="`width: ${Math.max(0, result.similarity * 200)}px`"></span>
+                                </td>
+                                <td>
+                                    <button @click="playSong(result.id, 'audioPlayer')" class="btn-play">
+                                        <span x-show="currentlyPlaying !== result.id">▶️ Play</span>
+                                        <span x-show="currentlyPlaying === result.id">⏸️ Pause</span>
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div x-show="currentTab === 'similarity'" class="tab-content">
+            <h2>Find Similar Songs</h2>
+            
+            <div x-show="stats.total_songs === 0" class="empty-state">
+                <p>⚠️ No songs analyzed yet!</p>
+                <p>Please go to the <strong>Analysis</strong> tab and analyze your music library first.</p>
+            </div>
+            
+            <div x-show="stats.total_songs > 0">
+                <p>Type to search and select a song to find similar tracks.</p>
+                
+                <div class="form-group">
+                    <label>Search for a song:</label>
+                    <input type="text" 
+                           x-model="songSearchQuery" 
+                           @input="filterSongs()"
+                           placeholder="Type artist or song name...">
+                    
+                    <label>Select song:</label>
+                    <select x-model="selectedSongId" @change="searchSimilar()" size="10">
+                        <option value="">-- Select a song --</option>
+                        <template x-for="song in filteredSongs.slice(0, 50)" :key="song.id">
+                            <option :value="song.id" x-text="`${song.artist || 'Unknown'} - ${song.title || song.filename}`"></option>
+                        </template>
+                    </select>
+                    <p x-show="filteredSongs.length > 50" class="hint">Showing first 50 matches. Keep typing to narrow results.</p>
+                    <p x-show="filteredSongs.length === 0 && songSearchQuery" class="hint">No songs match your search.</p>
+                </div>
+            </div>
+
+            <!-- Results -->
+            <div x-show="similarResults.length > 0" class="results">
+                <!-- Audio Player -->
+                <div x-show="currentlyPlaying !== null" class="audio-player-container">
+                    <div class="now-playing-info">
+                        <span x-text="getCurrentSongInfo()"></span>
+                    </div>
+                    <audio id="audioPlayer2" 
+                           controls 
+                           @ended="currentlyPlaying = null"
+                           class="audio-player">
+                    </audio>
+                </div>
+
+                <h3>Top <span x-text="similarResults.length"></span> Similar Songs</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Artist</th>
+                            <th>Title</th>
+                            <th>Similarity</th>
+                            <th>Play</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(result, index) in similarResults" :key="result.id">
+                            <tr>
+                                <td x-text="index + 1"></td>
+                                <td x-text="result.artist || 'Unknown'"></td>
+                                <td x-text="result.title || result.filename"></td>
+                                <td>
+                                    <span class="score" x-text="result.similarity.toFixed(4)"></span>
+                                    <span class="score-bar" :style="`width: ${Math.max(0, result.similarity * 200)}px`"></span>
+                                </td>
+                                <td>
+                                    <button @click="playSong(result.id, 'audioPlayer2')" class="btn-play">
+                                        <span x-show="currentlyPlaying !== result.id">▶️ Play</span>
+                                        <span x-show="currentlyPlaying === result.id">⏸️ Pause</span>
+                                    </button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js?v=2"></script>
+</body>
+</html>

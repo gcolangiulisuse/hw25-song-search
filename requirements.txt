@@ -1,3 +1,5 @@
+# Offline CLI tools requirements (single_analysis.py, multiple_analysis.py, clap_analysis.py)
+# The web interface uses backend/requirements.txt instead
 laion-clap
 librosa
 torch

@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  song-search:
+    build: .
+    container_name: song-search-app
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount your music directory (put your music files in ./songs folder)
+      - /Users/gcolangiuli/Music:/app/data/songs:ro
+      # Mount config directory (database + model stored here)
+      - ./models:/app/config
+    restart: unless-stopped
