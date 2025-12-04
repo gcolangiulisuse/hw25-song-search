@@ -250,11 +250,33 @@ class AudioAnalyzer:
         # Process batches in parallel (much faster than individual segments)
         print(f"⏱️  Processing {len(segments)} segments in {len(segment_batches)} batches with persistent pool...")
         map_start = time.time()
-        batch_results = self.pool.map(_process_segments_batch, segment_batches)
         
-        # Flatten the results from all batches
-        audio_embeddings = np.vstack(batch_results)
-        print(f"⏱️  Segments processed in {time.time() - map_start:.2f}s")
+        try:
+            # Add timeout to prevent infinite hangs - fixed 2 minute maximum
+            timeout = 120
+            print(f"⏱️  Using timeout of {timeout}s for processing")
+            
+            batch_results = self.pool.map_async(_process_segments_batch, segment_batches).get(timeout=timeout)
+            
+            # Flatten the results from all batches
+            audio_embeddings = np.vstack(batch_results)
+            print(f"⏱️  Segments processed in {time.time() - map_start:.2f}s")
+        except multiprocessing.TimeoutError:
+            # Pool is corrupted after timeout - need to terminate and recreate
+            print("⚠️  Timeout occurred - terminating corrupted pool and recreating...")
+            if self.pool:
+                self.pool.terminate()
+                self.pool.join()
+                self.pool = None
+            raise RuntimeError(f"Analysis timed out after {timeout}s. The file may be corrupted or too complex to process.")
+        except Exception as e:
+            # On any error, recreate pool to ensure clean state
+            print(f"⚠️  Error occurred - recreating pool for next song...")
+            if self.pool:
+                self.pool.terminate()
+                self.pool.join()
+                self.pool = None
+            raise RuntimeError(f"Processing failed: {str(e)}")
         
         # Convert to numpy and compute average
         audio_embeddings = np.array(audio_embeddings)

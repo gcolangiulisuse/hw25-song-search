@@ -489,10 +489,15 @@ async def run_analysis(songs_path: str):
                 
                 # Analyze song - runs in executor to avoid blocking
                 # This uses multiprocessing internally (original clap_analysis.py approach)
+                # Add asyncio timeout as additional safety measure
                 loop = asyncio.get_event_loop()
-                embedding, duration_sec, num_segments = await loop.run_in_executor(
-                    None, analyzer.analyze_song, audio_path
-                )
+                try:
+                    embedding, duration_sec, num_segments = await asyncio.wait_for(
+                        loop.run_in_executor(None, analyzer.analyze_song, audio_path),
+                        timeout=120  # 2 minutes max per song
+                    )
+                except asyncio.TimeoutError:
+                    raise RuntimeError(f"Analysis timed out after 2 minutes")
                 
                 print(f"✅ Analyzed {filename}: {num_segments} segments, {duration_sec:.1f}s")
                 
@@ -526,10 +531,24 @@ async def run_analysis(songs_path: str):
                 db.update_progress(True, filename, idx, total, progress_pct, f'Completed {filename}')
             
             except Exception as e:
-                print(f"❌ Error analyzing {filename}: {e}")
+                error_msg = str(e)
+                print(f"\n❌ Error analyzing {filename}: {error_msg}")
+                
+                # Terminate corrupted pool after timeout/error
+                if analyzer.pool:
+                    print("⚠️  Terminating corrupted pool after error...")
+                    analyzer.pool.terminate()
+                    analyzer.pool.join()
+                    analyzer.pool = None
+                    print("✅ Pool terminated, will be recreated for next song")
+                
+                print(f"⏭️  Skipping {filename} and continuing with next song...\n")
                 import traceback
                 traceback.print_exc()
-                db.update_progress(True, filename, idx, total, progress_pct, f'Error with {filename}: {str(e)}')
+                db.update_progress(True, filename, idx, total, progress_pct, f'Error with {filename} (skipped): {error_msg}')
+                # Continue with next song instead of stopping
+                await asyncio.sleep(0.1)
+                continue
         
         # Complete - Clear query cache again so new searches include all songs
         db.clear_query_cache()

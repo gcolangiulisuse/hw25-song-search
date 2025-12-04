@@ -110,6 +110,10 @@ function app() {
         
         // Analysis Methods
         async startAnalysis() {
+            // Immediately update UI to prevent multiple clicks
+            this.analysisState.is_running = true;
+            this.analysisState.status_message = 'Starting analysis...';
+            
             try {
                 const response = await fetch('/api/analysis/start', {
                     method: 'POST'
@@ -118,11 +122,17 @@ function app() {
                 const data = await response.json();
                 
                 if (data.success) {
-                    this.analysisState.status_message = 'Starting analysis...';
                     // Start checking status immediately
                     this.startPolling();
+                } else {
+                    // Reset state if request failed
+                    this.analysisState.is_running = false;
+                    this.analysisState.status_message = '';
                 }
             } catch (error) {
+                // Reset state on error
+                this.analysisState.is_running = false;
+                this.analysisState.status_message = '';
                 alert(`Error starting analysis: ${error.message}`);
             }
         },
