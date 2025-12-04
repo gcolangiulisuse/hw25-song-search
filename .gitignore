@@ -27,6 +27,11 @@ models/*.pth
 .DS_Store
 Thumbs.db
 
+# Data directories and database files
+models/*.db
+*.db
+config/
+
 # Results files
 results_*.csv
 
