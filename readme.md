@@ -22,5 +22,5 @@ For full project details please visit the official Hackweek page:
 - 🤖 **[AI Support in Development](docs/6-ai_support.md)** - GitHub Copilot usage and lessons learned
 - 📊 **[LaTeX Presentation](docs/8-latex_presentation.md)** - Beamer presentation documentation
 - 📄 **[Full Output Example](docs/9-full_output_example.md)** - Complete analysis output with all segments and scores
-- **[Docker Final Implementation](10-docker-final-implementation.md)** - Final implementation based on docker
+- 🐳 **[Docker Final Implementation](docs/10-docker-final-implementation.md)** - Final (experimental) implementation based on docker
 
