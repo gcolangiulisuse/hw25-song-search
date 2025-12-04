@@ -353,16 +353,28 @@ class Database:
         # Get all other songs
         all_songs = self.get_all_songs()
         
-        # Compute similarities
-        similarities = []
-        for song in all_songs:
+        # Compute similarities in parallel
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
+        
+        def compute_song_similarity(song):
+            """Compute similarity between target and one song."""
             if song['id'] == song_id:
-                continue
-            
+                return None
             # Cosine similarity (embeddings are already normalized)
             similarity = float(np.dot(target_embedding, song['embedding']))
+            return (song, similarity)
+        
+        similarities = []
+        max_workers = min(os.cpu_count() or 4, len(all_songs))
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(compute_song_similarity, song): song for song in all_songs}
             
-            similarities.append((song, similarity))
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    similarities.append(result)
         
         # Sort by similarity (highest first) and limit
         similarities.sort(key=lambda x: x[1], reverse=True)

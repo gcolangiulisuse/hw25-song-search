@@ -246,14 +246,21 @@ async def search_by_text(request: TextSearchRequest):
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"Failed to initialize model: {str(e)}")
     
-    # Compute similarities for all songs
+    # Compute similarities for all songs using parallel threads
     all_results = []
     try:
-        for song in songs:
+        # Prepare data for parallel processing
+        query_text = request.query.strip()
+        
+        # Use ThreadPoolExecutor for parallel text similarity computation
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
+        
+        def compute_similarity_for_song(song):
+            """Worker function to compute similarity for one song."""
             try:
-                similarity = analyzer.compute_text_similarity(song['embedding'], request.query.strip())
-                
-                all_results.append({
+                similarity = analyzer.compute_text_similarity(song['embedding'], query_text)
+                return {
                     'id': song['id'],
                     'filename': song['filename'],
                     'filepath': song['filepath'],
@@ -261,22 +268,30 @@ async def search_by_text(request: TextSearchRequest):
                     'title': song['title'],
                     'duration_sec': song['duration_sec'],
                     'similarity': similarity
-                })
-                
-                # Cache result
-                db.add_query_result(
-                    song_id=song['id'],
-                    query_text=request.query.strip(),
-                    similarity=similarity,
-                    max_score=similarity,
-                    min_score=similarity,
-                    std_score=0.0
-                )
+                }
             except Exception as e:
                 print(f"❌ Failed to compute similarity for {song['filename']}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
+                return None
+        
+        # Process in parallel with threads (no pickling issues)
+        max_workers = min(os.cpu_count() or 4, len(songs))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(compute_similarity_for_song, song): song for song in songs}
+            
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    all_results.append(result)
+                    
+                    # Cache result
+                    db.add_query_result(
+                        song_id=result['id'],
+                        query_text=query_text,
+                        similarity=result['similarity'],
+                        max_score=result['similarity'],
+                        min_score=result['similarity'],
+                        std_score=0.0
+                    )
     except Exception as e:
         print(f"❌ Critical error in similarity computation: {e}")
         import traceback
