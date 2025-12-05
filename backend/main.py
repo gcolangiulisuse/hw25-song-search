@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
 import multiprocessing
+import numpy as np  # Added for vectorized operations
 
 # CRITICAL: Force fork mode for multiprocessing to share model memory
 multiprocessing.set_start_method('fork', force=True)
@@ -200,7 +201,7 @@ async def get_analysis_status():
 
 @app.post("/api/search/text")
 async def search_by_text(request: TextSearchRequest):
-    """Search songs by text query."""
+    """Search songs by text query using Vectorized Optimization (O(1))."""
     if not request.query or not request.query.strip():
         raise HTTPException(status_code=400, detail="Search query cannot be empty")
     
@@ -216,18 +217,17 @@ async def search_by_text(request: TextSearchRequest):
     
     # Check cache first
     try:
-        results = db.search_by_text(request.query.strip(), limit=request.limit)
+        cached_results = db.search_by_text(request.query.strip(), limit=request.limit)
+        if cached_results:
+            return {
+                'query': request.query.strip(),
+                'results': cached_results,
+                'cached': True
+            }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+        print(f"⚠️ Cache lookup failed, proceeding to compute: {e}")
     
-    if results:
-        return {
-            'query': request.query.strip(),
-            'results': results,
-            'cached': True
-        }
-    
-    # Compute similarities
+    # 1. Fetch all songs
     try:
         songs = db.get_all_songs()
     except Exception as e:
@@ -236,7 +236,7 @@ async def search_by_text(request: TextSearchRequest):
     if not songs:
         raise HTTPException(status_code=400, detail="No songs available. Please run analysis first.")
     
-    # Initialize model if needed
+    # 2. Initialize model if needed
     if analyzer.model is None:
         try:
             analyzer.initialize_model()
@@ -246,60 +246,60 @@ async def search_by_text(request: TextSearchRequest):
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"Failed to initialize model: {str(e)}")
     
-    # Compute similarities for all songs using parallel threads
-    all_results = []
+    # 3. Vectorized Similarity Computation
     try:
-        # Prepare data for parallel processing
         query_text = request.query.strip()
         
-        # Use ThreadPoolExecutor for parallel text similarity computation
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import os
+        # A. Get Text Embedding ONCE (Heavy Operation)
+        text_embedding = analyzer.get_text_embedding(query_text)
         
-        def compute_similarity_for_song(song):
-            """Worker function to compute similarity for one song."""
-            try:
-                similarity = analyzer.compute_text_similarity(song['embedding'], query_text)
-                return {
-                    'id': song['id'],
-                    'filename': song['filename'],
-                    'filepath': song['filepath'],
-                    'artist': song['artist'],
-                    'title': song['title'],
-                    'duration_sec': song['duration_sec'],
-                    'similarity': similarity
-                }
-            except Exception as e:
-                print(f"❌ Failed to compute similarity for {song['filename']}: {e}")
-                return None
+        # B. Prepare Audio Matrix (Fast)
+        # Convert list of embeddings to one numpy matrix (N, 512)
+        audio_matrix = np.stack([s['embedding'] for s in songs])
         
-        # Process in parallel with threads (no pickling issues)
-        max_workers = min(os.cpu_count() or 4, len(songs))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(compute_similarity_for_song, song): song for song in songs}
+        # C. Matrix Multiplication (Instant)
+        # (N, 512) @ (512,) -> (N,)
+        similarities = audio_matrix @ text_embedding
+        
+        # 4. Format Results
+        all_results = []
+        
+        # Note: We iterate to format the response and save to cache.
+        # This loop is very fast compared to model inference.
+        for i, song in enumerate(songs):
+            score = float(similarities[i])
             
-            for future in as_completed(futures):
-                result = future.result()
-                if result:
-                    all_results.append(result)
-                    
-                    # Cache result
-                    db.add_query_result(
-                        song_id=result['id'],
-                        query_text=query_text,
-                        similarity=result['similarity'],
-                        max_score=result['similarity'],
-                        min_score=result['similarity'],
-                        std_score=0.0
-                    )
+            all_results.append({
+                'id': song['id'],
+                'filename': song['filename'],
+                'filepath': song['filepath'],
+                'artist': song['artist'],
+                'title': song['title'],
+                'duration_sec': song['duration_sec'],
+                'similarity': score
+            })
+            
+            # Cache individual result
+            # Optimization: In a real production app, you might want to batch this insert
+            # or only cache the top N results to save DB writes.
+            # For 1-5k songs, SQLite handles this loop fine.
+            db.add_query_result(
+                song_id=song['id'],
+                query_text=query_text,
+                similarity=score,
+                max_score=score,
+                min_score=score,
+                std_score=0.0
+            )
+
     except Exception as e:
-        print(f"❌ Critical error in similarity computation: {e}")
+        print(f"❌ Critical error in vectorized search: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to compute similarities: {str(e)}")
     
     if not all_results:
-        raise HTTPException(status_code=500, detail="Failed to compute any similarities. Please try again.")
+        raise HTTPException(status_code=500, detail="Failed to compute any similarities.")
     
     # Sort by similarity
     all_results.sort(key=lambda x: x['similarity'], reverse=True)

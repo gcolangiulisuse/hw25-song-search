@@ -319,13 +319,20 @@ class AudioAnalyzer:
             
             print("✅ Text model ready")
     
-    def compute_text_similarity(self, audio_embedding: np.ndarray, query_text: str) -> float:
-        """Compute similarity between audio embedding and text query."""
+    def get_text_embedding(self, query_text: str) -> np.ndarray:
+        """
+        Get the embedding for a text query ONE time (Vectorized optimization).
+        This isolates the heavy transformer inference.
+        """
         if self.model is None:
             raise RuntimeError("Model not initialized")
+
+        # Use the main model for text embedding (assuming it's loaded in CLAP_Module)
+        # Note: In the original code we used a separate self.text_model sometimes,
+        # but self.model (the main one) handles text too.
         
         try:
-            # Monkey-patch RoBERTa forward to fix input_shape unpacking bug
+            # Monkey-patch RoBERTa forward to fix input_shape unpacking bug if needed
             import transformers.models.roberta.modeling_roberta as roberta_module
             
             if not hasattr(roberta_module, '_original_roberta_forward'):
@@ -358,28 +365,25 @@ class AudioAnalyzer:
                     )
                 
                 roberta_module.RobertaModel.forward = patched_forward
-                print("🔧 Applied RoBERTa forward() monkey-patch")
             
             with torch.no_grad():
                 text_embedding = self.model.get_text_embedding([query_text], use_tensor=False)
             
+            # Ensure it is a 1D numpy array
             if isinstance(text_embedding, np.ndarray):
                 if text_embedding.ndim == 2:
-                    text_vec = text_embedding[0]
-                elif text_embedding.ndim == 1:
-                    text_vec = text_embedding
-                else:
-                    raise ValueError(f"Unexpected shape: {text_embedding.shape}")
+                    return text_embedding[0]
+                return text_embedding
+            elif isinstance(text_embedding, torch.Tensor):
+                return text_embedding.cpu().numpy()[0]
             else:
-                raise ValueError(f"Unexpected type: {type(text_embedding)}")
-            
-            similarity = float(np.dot(audio_embedding, text_vec))
-            return similarity
-            
+                # Fallback
+                return np.array(text_embedding).flatten()
+                
         except Exception as e:
-            print(f"❌ Error in compute_text_similarity: {e}")
+            print(f"❌ Error in get_text_embedding: {e}")
             raise
-    
+
     def get_metadata(self, audio_path: str) -> Tuple[Optional[str], Optional[str]]:
         """Extract artist and title from audio file metadata."""
         try:
