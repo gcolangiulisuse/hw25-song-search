@@ -117,7 +117,7 @@ class AudioAnalyzer:
                 # CRITICAL FIX: Cap max workers to prevent OOM kills.
                 # Even if you have 12 cores, running 10 LLM-inference threads usually kills RAM.
                 # We cap at 3 by default to be safe.
-                safe_limit = 3
+                safe_limit = 10
                 self.num_workers = max(1, min(safe_limit, total_cores - 1))
                 print(f"🔧 Auto-configured workers: {self.num_workers} (Safe mode: max {safe_limit} threads to prevent crash)")
         else:
