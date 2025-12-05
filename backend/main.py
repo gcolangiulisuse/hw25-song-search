@@ -8,7 +8,7 @@ import sys
 import asyncio
 from pathlib import Path
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict
 import multiprocessing
 import numpy as np  # Added for vectorized operations
 
@@ -39,6 +39,32 @@ db = Database("/app/config/analysis.db")
 analyzer = AudioAnalyzer()
 
 # ============================================================================
+# IN-MEMORY CACHE (RAM)
+# ============================================================================
+# Storing data in RAM prevents reading from SQLite disk for every search
+CACHED_SONGS: List[Dict] = []
+CACHED_AUDIO_MATRIX: Optional[np.ndarray] = None
+
+def refresh_memory_cache():
+    """Load all songs and embeddings from DB into RAM."""
+    global CACHED_SONGS, CACHED_AUDIO_MATRIX
+    try:
+        print("🧠 Loading database into RAM...")
+        songs = db.get_all_songs()
+        if songs:
+            CACHED_SONGS = songs
+            # Create the matrix once so we don't do it on every request
+            CACHED_AUDIO_MATRIX = np.stack([s['embedding'] for s in songs])
+            print(f"✅ Cached {len(songs)} songs in RAM")
+        else:
+            CACHED_SONGS = []
+            CACHED_AUDIO_MATRIX = None
+            print("⚠️ No songs to load into RAM")
+    except Exception as e:
+        print(f"❌ Failed to cache songs: {e}")
+
+
+# ============================================================================
 # Request Models
 # ============================================================================
 
@@ -64,7 +90,17 @@ async def startup():
     print("\n" + "="*80)
     print("🎵 Song Search Web App Starting...")
     print("="*80)
-    print("   Model will be initialized on first analysis or search")
+    
+    # 1. Pre-initialize Model (Avoids delay on first search)
+    print("🤖 Pre-initializing AI Model (this may take a moment)...")
+    try:
+        analyzer.initialize_model()
+    except Exception as e:
+        print(f"❌ Model initialization warning: {e}")
+
+    # 2. Pre-load DB into RAM
+    refresh_memory_cache()
+
     print()
     
     # Reset any stuck analysis state from previous runs
@@ -201,19 +237,12 @@ async def get_analysis_status():
 
 @app.post("/api/search/text")
 async def search_by_text(request: TextSearchRequest):
-    """Search songs by text query using Vectorized Optimization (O(1))."""
+    """Search songs by text query using Vectorized Optimization (O(1)) and RAM Cache."""
     if not request.query or not request.query.strip():
         raise HTTPException(status_code=400, detail="Search query cannot be empty")
     
     if len(request.query.strip()) < 3:
         raise HTTPException(status_code=400, detail="Search query must be at least 3 characters long")
-    
-    songs_count = db.get_songs_count()
-    if songs_count == 0:
-        raise HTTPException(
-            status_code=400, 
-            detail="No songs analyzed yet. Please go to the Analysis tab and analyze your songs first."
-        )
     
     # Check cache first
     try:
@@ -225,18 +254,18 @@ async def search_by_text(request: TextSearchRequest):
                 'cached': True
             }
     except Exception as e:
-        print(f"⚠️ Cache lookup failed, proceeding to compute: {e}")
+        print(f"⚠️ DB Cache lookup failed, proceeding to compute: {e}")
     
-    # 1. Fetch all songs
-    try:
-        songs = db.get_all_songs()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load songs: {str(e)}")
+    # 1. Access Data from RAM (Instant)
+    global CACHED_SONGS, CACHED_AUDIO_MATRIX
     
-    if not songs:
-        raise HTTPException(status_code=400, detail="No songs available. Please run analysis first.")
+    if CACHED_AUDIO_MATRIX is None or not CACHED_SONGS:
+        # Try refreshing if empty (maybe analysis just finished)
+        refresh_memory_cache()
+        if CACHED_AUDIO_MATRIX is None:
+             raise HTTPException(status_code=400, detail="No songs analyzed. Please run analysis first.")
     
-    # 2. Initialize model if needed
+    # 2. Initialize model if needed (Should be pre-loaded at startup)
     if analyzer.model is None:
         try:
             analyzer.initialize_model()
@@ -250,23 +279,18 @@ async def search_by_text(request: TextSearchRequest):
     try:
         query_text = request.query.strip()
         
-        # A. Get Text Embedding ONCE (Heavy Operation)
+        # A. Get Text Embedding ONCE (Heavy Operation - ~0.05s)
         text_embedding = analyzer.get_text_embedding(query_text)
         
-        # B. Prepare Audio Matrix (Fast)
-        # Convert list of embeddings to one numpy matrix (N, 512)
-        audio_matrix = np.stack([s['embedding'] for s in songs])
-        
-        # C. Matrix Multiplication (Instant)
+        # B. Matrix Multiplication (Instant - Using RAM Cache)
         # (N, 512) @ (512,) -> (N,)
-        similarities = audio_matrix @ text_embedding
+        similarities = CACHED_AUDIO_MATRIX @ text_embedding
         
         # 4. Format Results
         all_results = []
         
-        # Note: We iterate to format the response and save to cache.
-        # This loop is very fast compared to model inference.
-        for i, song in enumerate(songs):
+        # We iterate to format the response and save to DB query cache.
+        for i, song in enumerate(CACHED_SONGS):
             score = float(similarities[i])
             
             all_results.append({
@@ -279,10 +303,7 @@ async def search_by_text(request: TextSearchRequest):
                 'similarity': score
             })
             
-            # Cache individual result
-            # Optimization: In a real production app, you might want to batch this insert
-            # or only cache the top N results to save DB writes.
-            # For 1-5k songs, SQLite handles this loop fine.
+            # Cache individual result to DB for future exact-match lookups
             db.add_query_result(
                 song_id=song['id'],
                 query_text=query_text,
@@ -568,6 +589,10 @@ async def run_analysis(songs_path: str):
 
         # Complete
         db.clear_query_cache()
+        
+        # REFRESH MEMORY CACHE
+        refresh_memory_cache()
+        
         final_analyzed = db.get_songs_count()
         msg = f'Complete! {final_analyzed} songs in database ({to_analyze_count} newly analyzed).'
         db.update_progress(False, '', total_files, total_files, 100.0, msg)
