@@ -422,11 +422,11 @@ async def stream_audio(song_id: int):
 
 
 # ============================================================================
-# Background Analysis Task (Like Original clap_analysis.py)
+# Background Analysis Task (Optimized for Resumability)
 # ============================================================================
 
 async def run_analysis(songs_path: str):
-    """Background task to analyze all songs - ORIGINAL APPROACH."""
+    """Background task to analyze only new songs sequentially."""
     db.update_progress(True, '', 0, 0, 0.0, 'Starting analysis...')
     
     try:
@@ -447,59 +447,76 @@ async def run_analysis(songs_path: str):
                 db.update_progress(False, '', 0, 0, 0.0, error_msg)
                 return
         
-        # Find audio files
+        # 1. Find all audio files on disk
+        print(f"📂 Scanning directory: {songs_path}")
         audio_files = find_audio_files(songs_path)
-        total = len(audio_files)
+        total_files = len(audio_files)
         
-        if total == 0:
+        if total_files == 0:
             db.update_progress(False, '', 0, 0, 0.0, 'No audio files found')
             print("⚠️  No audio files found in directory")
             return
+            
+        # 2. Get list of already analyzed songs (using efficient Set lookup)
+        # This prevents the loop from having to query the DB for every single skipped file
+        print("📊 Fetching existing database records...")
+        existing_filenames = db.get_all_filenames()
+        already_analyzed_count = 0
         
-        # Count already analyzed
-        already_analyzed = sum(1 for f in audio_files if db.song_exists(os.path.basename(f)))
-        to_analyze = total - already_analyzed
+        # 3. Filter list to process ONLY new files
+        files_to_process = []
+        for f in audio_files:
+            if os.path.basename(f) in existing_filenames:
+                already_analyzed_count += 1
+            else:
+                files_to_process.append(f)
         
-        if to_analyze == 0:
-            msg = f'All {total} songs already analyzed. No new songs to process.'
-            db.update_progress(False, '', total, total, 100.0, msg)
+        to_analyze_count = len(files_to_process)
+        
+        # Immediate success if nothing to do
+        if to_analyze_count == 0:
+            msg = f'All {total_files} songs already analyzed. No new songs to process.'
+            db.update_progress(False, '', total_files, total_files, 100.0, msg)
             print(f"\n✅ {msg}\n")
             return
+
+        print(f"\n📊 Analysis Plan:")
+        print(f"   Total found: {total_files}")
+        print(f"   Skipping:    {already_analyzed_count} (already in DB)")
+        print(f"   To Analyze:  {to_analyze_count}")
         
-        print(f"\n📊 Found {total} songs: {already_analyzed} already analyzed, {to_analyze} new\n")
+        # Update progress to show we jumped ahead
+        current_progress_pct = (already_analyzed_count / total_files) * 100
+        db.update_progress(True, '', already_analyzed_count, total_files, current_progress_pct, 
+                          f'Skipped {already_analyzed_count} files, starting analysis of {to_analyze_count} new files...')
         
-        # Sequential song processing - one song at a time (parallel causes pool contention)
-        max_concurrent_songs = 1  # Process 1 song at a time to avoid multiprocessing pool conflicts
+        # 4. Sequential Processing Loop
+        # We use a simple FOR loop + await to guarantee STRICT sequential processing.
+        # This fixes the "starting multiple" crash issue completely.
         
-        async def analyze_single_song(idx: int, audio_path: str, skip_db_check: bool = False):
-            """Analyze a single song (runs as async task)."""
+        for i, audio_path in enumerate(files_to_process):
+            # Calculate global index (including skipped ones)
+            global_idx = already_analyzed_count + i + 1
             filename = os.path.basename(audio_path)
             
-            print(f"\n📝 Processing {idx}/{total}: {filename}")
+            print(f"\n📝 Processing {global_idx}/{total_files}: {filename}")
             
-            progress_pct = (idx / total) * 100
-            db.update_progress(True, filename, idx, total, progress_pct, f'Processing {idx}/{total}: {filename}...')
+            progress_pct = (global_idx / total_files) * 100
+            db.update_progress(True, filename, global_idx, total_files, progress_pct, 
+                             f'Analyzing {i+1}/{to_analyze_count}: {filename}...')
             
             try:
-                # Check if already analyzed (only if not already checked)
-                if not skip_db_check and db.song_exists(filename):
-                    print(f"⏭️  Skipping {filename} (already analyzed)")
-                    db.update_progress(True, filename, idx, total, progress_pct, f'Skipping {filename} (already analyzed)')
-                    return
-                
                 print(f"🎵 Starting analysis of {filename}...")
                 
                 # Analyze song - runs in executor to avoid blocking
-                # This uses multiprocessing internally (original clap_analysis.py approach)
-                # Add asyncio timeout as additional safety measure
                 loop = asyncio.get_event_loop()
                 try:
                     embedding, duration_sec, num_segments = await asyncio.wait_for(
                         loop.run_in_executor(None, analyzer.analyze_song, audio_path),
-                        timeout=120  # 2 minutes max per song
+                        timeout=180  # 3 minutes max per song
                     )
                 except asyncio.TimeoutError:
-                    raise RuntimeError(f"Analysis timed out after 2 minutes")
+                    raise RuntimeError(f"Analysis timed out after 3 minutes")
                 
                 print(f"✅ Analyzed {filename}: {num_segments} segments, {duration_sec:.1f}s")
                 
@@ -507,8 +524,6 @@ async def run_analysis(songs_path: str):
                 artist, title = await loop.run_in_executor(
                     None, analyzer.get_metadata, audio_path
                 )
-                
-                print(f"📋 Metadata: {artist} - {title}")
                 
                 # Get file stats
                 file_stats = os.stat(audio_path)
@@ -529,65 +544,41 @@ async def run_analysis(songs_path: str):
                 )
                 
                 print(f"💾 Saved {filename} to database")
-                
-                db.update_progress(True, filename, idx, total, progress_pct, f'Completed {filename}')
             
             except Exception as e:
                 error_msg = str(e)
                 print(f"\n❌ Error analyzing {filename}: {error_msg}")
                 
-                # FORCE terminate and recreate pool after any error
-                print("⚠️  Force terminating pool after error...")
+                # Safely reset pool if needed
+                print("⚠️  Resetting thread pool after error...")
                 try:
-                    if analyzer.pool:
-                        analyzer.pool.terminate()
-                        analyzer.pool.join(timeout=5)
-                        analyzer.pool.close()
+                    # Fix: use the correct method from analysis.py
+                    if hasattr(analyzer, 'close_pool'):
+                        analyzer.close_pool()
+                    elif hasattr(analyzer, 'executor') and analyzer.executor:
+                        analyzer.executor.shutdown(wait=False)
+                        analyzer.executor = None
                 except Exception as pool_err:
-                    print(f"⚠️  Error terminating pool: {pool_err}")
-                finally:
-                    analyzer.pool = None
-                    print("✅ Pool destroyed, forcing recreation for next song")
+                    print(f"⚠️  Error closing pool: {pool_err}")
                 
                 print(f"⏭️  Skipping {filename} and continuing with next song...\n")
+                # Don't crash the whole loop, just this song
                 import traceback
                 traceback.print_exc()
-                db.update_progress(True, filename, idx, total, progress_pct, f'Error with {filename} (skipped): {error_msg}')
-        
-        # Process songs sequentially with smart skipping
-        semaphore = asyncio.Semaphore(max_concurrent_songs)
-        
-        async def controlled_analyze(idx: int, audio_path: str):
-            """Analyze song with single DB check and semaphore control."""
-            filename = os.path.basename(audio_path)
-            
-            # Quick check if song is already analyzed (SINGLE CHECK - before acquiring semaphore)
-            if db.song_exists(filename):
-                # Skipped songs don't use semaphore - process immediately without delay
-                await analyze_single_song(idx, audio_path, skip_db_check=True)
-                return
-            
-            # For songs needing analysis, acquire semaphore (limits to 1 concurrent)
-            async with semaphore:
-                await analyze_single_song(idx, audio_path, skip_db_check=True)
-        
-        # Execute all tasks - semaphore limits to 1 concurrent analysis, skipped songs are instant
-        print(f"\n🚀 Starting sequential analysis with fast skip optimization\n")
-        tasks = [controlled_analyze(idx, audio_path) for idx, audio_path in enumerate(audio_files, 1)]
-        await asyncio.gather(*tasks)
-        
-        # Complete - Clear query cache again so new searches include all songs
+
+        # Complete
         db.clear_query_cache()
-        
         final_analyzed = db.get_songs_count()
-        msg = f'Complete! {final_analyzed} songs in database ({to_analyze} newly analyzed, {already_analyzed} already existed).'
-        db.update_progress(False, '', total, total, 100.0, msg)
-        print(f"\n🎉 Analysis complete! {final_analyzed} songs in database ({to_analyze} newly analyzed).\n")
+        msg = f'Complete! {final_analyzed} songs in database ({to_analyze_count} newly analyzed).'
+        db.update_progress(False, '', total_files, total_files, 100.0, msg)
+        print(f"\n🎉 Analysis complete! {final_analyzed} songs in database.\n")
     
     except Exception as e:
-        error_msg = f'Error: {str(e)}'
+        error_msg = f'Fatal Analysis Error: {str(e)}'
         db.update_progress(False, '', 0, 0, 0.0, error_msg)
         print(f"Analysis error: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 # ============================================================================

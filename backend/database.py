@@ -7,7 +7,7 @@ import sqlite3
 import json
 import os
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Set
 import numpy as np
 
 
@@ -240,7 +240,7 @@ class Database:
         }
     
     def get_all_songs(self) -> List[Dict]:
-        """Get all songs."""
+        """Get all songs (full data)."""
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM songs ORDER BY filename")
         rows = cursor.fetchall()
@@ -262,6 +262,16 @@ class Database:
             })
         
         return songs
+    
+    def get_all_filenames(self) -> Set[str]:
+        """
+        Get a set of all analyzed filenames.
+        OPTIMIZED: Only selects filename column, much faster than get_all_songs.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT filename FROM songs")
+        rows = cursor.fetchall()
+        return {row['filename'] for row in rows}
     
     def get_songs_count(self) -> int:
         """Get total number of analyzed songs."""

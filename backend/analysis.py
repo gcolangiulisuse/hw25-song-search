@@ -7,6 +7,17 @@ import os
 import sys
 import glob
 
+# --- CRITICAL FIX: Set Thread Limits BEFORE Imports ---
+# These environment variables must be set before numpy/torch are imported.
+# If set afterwards, they are often ignored, causing CPU oversubscription
+# (e.g., 3 workers * 12 threads each = 36 threads fighting for CPU -> Crash)
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
+# ------------------------------------------------------
+
 # Suppress warnings
 os.environ['PYTHONWARNINGS'] = 'ignore'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -47,13 +58,8 @@ os.environ['PYTHONHASHSEED'] = '42'
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
 # --- CRITICAL FIX: Prevent CPU Oversubscription ---
-# With Threading, all threads run in this same process.
-# We MUST globally limit PyTorch to 1 thread per operation.
-# Since we run N threads in parallel, this results in N cores being used perfectly (1 per thread).
-# Without this, 10 threads * 10 cores = 100 ops fighting for CPU.
+# Ensure PyTorch also respects the single-thread limit at runtime
 torch.set_num_threads(1)
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
 # --------------------------------------------------
 
 # Global model for threads (shared memory)
@@ -101,10 +107,19 @@ class AudioAnalyzer:
         self.executor = None  # ThreadPoolExecutor
         
         if num_workers is None:
-            # Leave 2 cores free for system stability
-            total_cores = cpu_count()
-            self.num_workers = max(1, total_cores - 2)
-            print(f"🔧 Auto-configured workers: {self.num_workers} (leaving 2 cores free from {total_cores} total)")
+            # Check for env var override
+            env_workers = os.environ.get('MAX_ANALYSIS_WORKERS')
+            if env_workers:
+                self.num_workers = int(env_workers)
+                print(f"🔧 Using configured workers from env: {self.num_workers}")
+            else:
+                total_cores = cpu_count()
+                # CRITICAL FIX: Cap max workers to prevent OOM kills.
+                # Even if you have 12 cores, running 10 LLM-inference threads usually kills RAM.
+                # We cap at 3 by default to be safe.
+                safe_limit = 3
+                self.num_workers = max(1, min(safe_limit, total_cores - 1))
+                print(f"🔧 Auto-configured workers: {self.num_workers} (Safe mode: max {safe_limit} threads to prevent crash)")
         else:
             self.num_workers = num_workers
         
@@ -221,23 +236,18 @@ class AudioAnalyzer:
         # Ensure pool is ready
         self._ensure_pool()
         
-        # Split segments into batches
-        num_batches = min(self.num_workers, len(segments))
-        if num_batches < 1: num_batches = 1
-        
-        batch_size = len(segments) // num_batches
-        remainder = len(segments) % num_batches
+        # --- MEMORY FIX: Use fixed small batch sizes ---
+        # Previous logic divided song into N chunks (where N=workers).
+        # For long songs (e.g. 10 mins), this created massive batches (e.g. 50+ segments)
+        # which caused OOM when running in parallel.
+        # We now use a fixed, small batch size.
+        BATCH_SIZE = 4 
         
         segment_batches = []
-        start = 0
-        for i in range(num_batches):
-            extra = 1 if i < remainder else 0
-            end = start + batch_size + extra
-            if end > start:
-                segment_batches.append(segments[start:end])
-            start = end
+        for i in range(0, len(segments), BATCH_SIZE):
+            segment_batches.append(segments[i:i + BATCH_SIZE])
         
-        print(f"⏱️  Processing {len(segments)} segments in {len(segment_batches)} batches with thread pool...")
+        print(f"⏱️  Processing {len(segments)} segments in {len(segment_batches)} batches (size {BATCH_SIZE}) with thread pool...")
         map_start = time.time()
         
         try:
@@ -245,6 +255,7 @@ class AudioAnalyzer:
             timeout = 120
             
             # Submit all batches
+            # The executor (size=3) will handle the queueing, keeping memory usage to (3 * BATCH_SIZE)
             futures = [self.executor.submit(_process_segments_batch, batch) for batch in segment_batches]
             
             # Wait for results
