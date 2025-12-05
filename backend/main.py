@@ -334,34 +334,67 @@ async def search_by_text(request: TextSearchRequest):
 
 @app.post("/api/search/similar")
 async def search_similar(request: SimilaritySearchRequest):
-    """Find similar songs."""
+    """Find similar songs using Vectorized Optimization (O(1)) and RAM Cache."""
     if request.song_id <= 0:
         raise HTTPException(status_code=400, detail="Invalid song ID")
     
-    try:
-        target_song = db.get_song(request.song_id)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
+    # 1. Access Data from RAM
+    global CACHED_SONGS, CACHED_AUDIO_MATRIX
     
-    if not target_song:
-        raise HTTPException(status_code=404, detail=f"Song with ID {request.song_id} not found")
+    if CACHED_AUDIO_MATRIX is None or not CACHED_SONGS:
+        refresh_memory_cache()
+        if CACHED_AUDIO_MATRIX is None:
+             raise HTTPException(status_code=400, detail="No songs analyzed. Please run analysis first.")
+
+    # 2. Find target song in cache (Fast Linear Search in RAM)
+    target_index = -1
+    target_song = None
     
+    for i, song in enumerate(CACHED_SONGS):
+        if song['id'] == request.song_id:
+            target_index = i
+            target_song = song
+            break
+            
+    if target_index == -1:
+         raise HTTPException(status_code=404, detail=f"Song with ID {request.song_id} not found in cache.")
+
+    # 3. Vectorized Similarity Computation
     try:
-        similar_songs = db.get_similar_songs(request.song_id, limit=request.limit)
+        # Get embedding directly from RAM Matrix
+        target_embedding = CACHED_AUDIO_MATRIX[target_index]
+        
+        # Matrix Multiplication (Instant)
+        # (N, 512) @ (512,) -> (N,)
+        similarities = CACHED_AUDIO_MATRIX @ target_embedding
+        
+        # 4. Format Results
+        scored_songs = []
+        for i, song in enumerate(CACHED_SONGS):
+            score = float(similarities[i])
+            scored_songs.append((score, song))
+            
+        # Sort by score descending
+        scored_songs.sort(key=lambda x: x[0], reverse=True)
+        
+        # Take limit
+        results = []
+        for score, song in scored_songs[:request.limit]:
+             results.append({
+                'id': song['id'],
+                'filename': song['filename'],
+                'filepath': song['filepath'],
+                'artist': song['artist'],
+                'title': song['title'],
+                'duration_sec': song['duration_sec'],
+                'similarity': score
+            })
+    
     except Exception as e:
+        print(f"❌ Critical error in vectorized similar search: {e}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to find similar songs: {str(e)}")
-    
-    results = []
-    for song, similarity in similar_songs:
-        results.append({
-            'id': song['id'],
-            'filename': song['filename'],
-            'filepath': song['filepath'],
-            'artist': song['artist'],
-            'title': song['title'],
-            'duration_sec': song['duration_sec'],
-            'similarity': similarity
-        })
     
     return {
         'song_id': request.song_id,
@@ -632,7 +665,7 @@ if frontend_static.exists():
 
 if __name__ == "__main__":
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
         port=8000,
         reload=False,
