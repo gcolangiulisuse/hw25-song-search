@@ -25,12 +25,13 @@ import numpy as np
 import torch
 import laion_clap
 import librosa
-from multiprocessing import Pool, cpu_count
+from multiprocessing import cpu_count
 from typing import List, Tuple, Callable, Optional
 from mutagen import File as MutagenFile
 from mutagen.mp3 import MP3
 from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_EXCEPTION
 
 
 # Set all random seeds for reproducibility
@@ -45,30 +46,31 @@ torch.use_deterministic_algorithms(True, warn_only=True)
 os.environ['PYTHONHASHSEED'] = '42'
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
+# --- CRITICAL FIX: Prevent CPU Oversubscription ---
+# With Threading, all threads run in this same process.
+# We MUST globally limit PyTorch to 1 thread per operation.
+# Since we run N threads in parallel, this results in N cores being used perfectly (1 per thread).
+# Without this, 10 threads * 10 cores = 100 ops fighting for CPU.
+torch.set_num_threads(1)
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+# --------------------------------------------------
 
-# Global model for worker processes
+# Global model for threads (shared memory)
 _global_model = None
 
 
-def _init_worker():
-    """Initialize worker process - model is inherited via fork."""
-    # Just set random seeds in worker
-    random.seed(42)
-    np.random.seed(42)
-    torch.manual_seed(42)
-
-
 def _process_segments_batch(segments_batch):
-    """Process a batch of segments in worker process (faster than one-by-one)."""
+    """Process a batch of segments (runs in a thread)."""
     global _global_model
     if _global_model is None:
-        raise RuntimeError("❌ CRITICAL: _global_model is None in worker! Fork didn't work!")
+        raise RuntimeError("❌ CRITICAL: _global_model is None!")
     
     # Stack all segments into a single batch for faster inference
+    # Note: PyTorch releases the GIL during heavy inference, so this runs in parallel!
     batch_input = np.stack(segments_batch, axis=0)
     
     with torch.no_grad():
-        # Process entire batch at once (much faster than individual segments)
         audio_embeddings = _global_model.get_audio_embedding_from_data(
             x=batch_input,
             use_tensor=False
@@ -96,28 +98,27 @@ class AudioAnalyzer:
         self.hop_length = hop_length
         self.sample_rate = 48000
         self.model = None
-        self.pool = None  # Persistent pool
+        self.executor = None  # ThreadPoolExecutor
         
         if num_workers is None:
-            # Leave 2 cores free for system stability (avoid 100% CPU usage)
+            # Leave 2 cores free for system stability
             total_cores = cpu_count()
             self.num_workers = max(1, total_cores - 2)
             print(f"🔧 Auto-configured workers: {self.num_workers} (leaving 2 cores free from {total_cores} total)")
         else:
             self.num_workers = num_workers
         
-        print(f"🔧 AudioAnalyzer initialized with {self.num_workers} workers (total cores: {cpu_count()})")
+        print(f"🔧 AudioAnalyzer initialized with {self.num_workers} threads")
     
     def initialize_model(self):
-        """Initialize CLAP model for audio processing (will be shared via fork to workers)."""
+        """Initialize CLAP model."""
         if self.model is not None:
             return  # Already initialized
         
         print(f"🔧 Initializing CLAP model from {self.model_path}")
         
-        # Check if model exists
         if not os.path.exists(self.model_path):
-            raise FileNotFoundError(f"Model not found at {self.model_path}. Please mount the model volume.")
+            raise FileNotFoundError(f"Model not found at {self.model_path}")
         
         # Load model silently
         old_stdout = sys.stdout
@@ -127,7 +128,7 @@ class AudioAnalyzer:
         
         try:
             self.model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
-            # Patch load_state_dict temporarily to ignore unexpected keys
+            # Patch load_state_dict to ignore unexpected keys
             original_load_state_dict = self.model.model.load_state_dict
             self.model.model.load_state_dict = lambda *args, **kwargs: original_load_state_dict(*args, **{**kwargs, 'strict': False})
             self.model.load_ckpt(self.model_path)
@@ -141,34 +142,27 @@ class AudioAnalyzer:
         
         print("✅ Model initialized")
         
-        # Load model into global space for workers to inherit via fork
+        # Load model into global space for threads to access
         global _global_model
         _global_model = self.model
         
-        # NOTE: We do NOT use self.model for text queries because fork corrupts the tokenizer
-        # Text queries will use a separate fresh model instance
-        self.text_model = None  # Will be lazily initialized when needed
+        self.text_model = None
     
     def _ensure_pool(self):
-        """Ensure worker pool is created and ready."""
-        if self.pool is None:
-            print(f"⏱️  Creating fresh pool with {self.num_workers} workers...")
-            # Use fork context explicitly (required for PyTorch 2.1.2 to avoid deadlocks)
-            from multiprocessing import get_context
-            ctx = get_context('fork')
-            self.pool = ctx.Pool(processes=self.num_workers, initializer=_init_worker)
-            print(f"✅ Pool created with fork context")
+        """Ensure thread pool is ready."""
+        if self.executor is None:
+            print(f"⏱️  Creating fresh thread pool with {self.num_workers} threads...")
+            self.executor = ThreadPoolExecutor(max_workers=self.num_workers)
+            print(f"✅ Thread pool created")
         else:
-            # Pool exists - verify it's healthy by checking if workers are alive
-            print(f"♻️  Reusing existing pool with {self.num_workers} workers")
+            print(f"♻️  Reusing existing thread pool")
     
     def close_pool(self):
-        """Close the worker pool."""
-        if self.pool is not None:
-            self.pool.close()
-            self.pool.join()
-            self.pool = None
-            print("🔒 Pool closed")
+        """Close the thread pool."""
+        if self.executor is not None:
+            self.executor.shutdown(wait=True)
+            self.executor = None
+            print("🔒 Thread pool closed")
     
     def load_audio(self, audio_path: str) -> np.ndarray:
         """Load audio file."""
@@ -197,17 +191,7 @@ class AudioAnalyzer:
     
     def analyze_song(self, audio_path: str, 
                     progress_callback: Optional[Callable[[str], None]] = None) -> Tuple[np.ndarray, float, int]:
-        """
-        Analyze a song and return its average embedding.
-        
-        Args:
-            audio_path: Path to audio file
-            progress_callback: Optional callback for progress updates
-            use_parallel: Whether to use parallel processing (default True)
-        
-        Returns:
-            Tuple of (average_embedding, duration_sec, num_segments)
-        """
+        """Analyze a song and return its average embedding."""
         import time
         start_time = time.time()
         print(f"⏱️  Starting analysis of {audio_path}")
@@ -237,57 +221,60 @@ class AudioAnalyzer:
         # Ensure pool is ready
         self._ensure_pool()
         
-        # Split segments into batches (one per worker for optimal performance)
-        # Example: 46 segments with 12 workers = 12 batches of ~4 segments each
+        # Split segments into batches
         num_batches = min(self.num_workers, len(segments))
+        if num_batches < 1: num_batches = 1
+        
         batch_size = len(segments) // num_batches
         remainder = len(segments) % num_batches
         
         segment_batches = []
         start = 0
         for i in range(num_batches):
-            # Distribute remainder segments to first few batches
             extra = 1 if i < remainder else 0
             end = start + batch_size + extra
-            segment_batches.append(segments[start:end])
+            if end > start:
+                segment_batches.append(segments[start:end])
             start = end
         
-        # Process batches in parallel (much faster than individual segments)
-        print(f"⏱️  Processing {len(segments)} segments in {len(segment_batches)} batches with persistent pool...")
+        print(f"⏱️  Processing {len(segments)} segments in {len(segment_batches)} batches with thread pool...")
         map_start = time.time()
         
         try:
-            # Add timeout to prevent infinite hangs - fixed 2 minute maximum
+            # 2 minute timeout
             timeout = 120
-            print(f"⏱️  Using timeout of {timeout}s for processing")
             
-            batch_results = self.pool.map_async(_process_segments_batch, segment_batches).get(timeout=timeout)
+            # Submit all batches
+            futures = [self.executor.submit(_process_segments_batch, batch) for batch in segment_batches]
             
-            # Flatten the results from all batches
+            # Wait for results
+            done, not_done = wait(futures, timeout=timeout, return_when=FIRST_EXCEPTION)
+            
+            if not_done:
+                # Timeout occurred
+                for future in not_done:
+                    future.cancel()
+                # We don't necessarily need to kill the executor in threading (unlike process pool)
+                # but it's safer to restart it if something got stuck.
+                self.executor.shutdown(wait=False)
+                self.executor = None
+                raise RuntimeError(f"Analysis timed out after {timeout}s.")
+            
+            # Get results
+            batch_results = [future.result() for future in futures]
             audio_embeddings = np.vstack(batch_results)
             print(f"⏱️  Segments processed in {time.time() - map_start:.2f}s")
-        except multiprocessing.TimeoutError:
-            # Pool is corrupted after timeout - need to terminate and recreate
-            print("⚠️  Timeout occurred - terminating corrupted pool and recreating...")
-            if self.pool:
-                self.pool.terminate()
-                self.pool.join()
-                self.pool = None
-            raise RuntimeError(f"Analysis timed out after {timeout}s. The file may be corrupted or too complex to process.")
+            
         except Exception as e:
-            # On any error, recreate pool to ensure clean state
-            print(f"⚠️  Error occurred - recreating pool for next song...")
-            if self.pool:
-                self.pool.terminate()
-                self.pool.join()
-                self.pool = None
+            # On error, reset pool to be safe
+            if self.executor:
+                self.executor.shutdown(wait=False)
+                self.executor = None
             raise RuntimeError(f"Processing failed: {str(e)}")
         
-        # Convert to numpy and compute average
+        # Average and Normalize
         audio_embeddings = np.array(audio_embeddings)
         avg_embedding = np.mean(audio_embeddings, axis=0)
-        
-        # Normalize to unit length
         avg_embedding = avg_embedding / np.linalg.norm(avg_embedding)
         
         total_time = time.time() - start_time
@@ -296,16 +283,11 @@ class AudioAnalyzer:
         return avg_embedding, duration_sec, len(segments)
     
     def _ensure_text_model(self):
-        """
-        Ensure we have a fresh model instance for text queries.
-        CRITICAL: The model shared via fork has corrupted tokenizer state.
-        Text queries MUST use a separate fresh instance.
-        """
+        """Ensure fresh model for text queries (thread-safe logic)."""
         if self.text_model is None:
-            print(f"🔧 Creating fresh model instance for text queries (fork-safe)")
+            print(f"🔧 Creating fresh model instance for text queries")
             import laion_clap
             
-            # Load model silently
             old_stdout = sys.stdout
             old_stderr = sys.stderr
             sys.stdout = open(os.devnull, 'w')
@@ -313,7 +295,6 @@ class AudioAnalyzer:
             
             try:
                 self.text_model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
-                # Patch load_state_dict temporarily to ignore unexpected keys
                 original_load_state_dict = self.text_model.model.load_state_dict
                 self.text_model.model.load_state_dict = lambda *args, **kwargs: original_load_state_dict(*args, **{**kwargs, 'strict': False})
                 self.text_model.load_ckpt(self.model_path)
@@ -328,28 +309,15 @@ class AudioAnalyzer:
             print("✅ Text model ready")
     
     def compute_text_similarity(self, audio_embedding: np.ndarray, query_text: str) -> float:
-        """
-        Compute similarity between audio embedding and text query.
-        
-        Args:
-            audio_embedding: Normalized audio embedding
-            query_text: Text query
-        
-        Returns:
-            Similarity score
-        """
+        """Compute similarity between audio embedding and text query."""
         if self.model is None:
             raise RuntimeError("Model not initialized")
         
         try:
-            # WORKAROUND: Monkey-patch RoBERTa forward to fix input_shape unpacking bug
+            # Monkey-patch RoBERTa forward to fix input_shape unpacking bug
             import transformers.models.roberta.modeling_roberta as roberta_module
             
-            if hasattr(roberta_module, '_original_roberta_forward'):
-                # Already patched
-                pass
-            else:
-                # Save original and create patched version
+            if not hasattr(roberta_module, '_original_roberta_forward'):
                 roberta_module._original_roberta_forward = roberta_module.RobertaModel.forward
                 
                 def patched_forward(self, input_ids=None, attention_mask=None, token_type_ids=None,
@@ -357,7 +325,6 @@ class AudioAnalyzer:
                                   encoder_hidden_states=None, encoder_attention_mask=None,
                                   past_key_values=None, use_cache=None, output_attentions=None,
                                   output_hidden_states=None, return_dict=None):
-                    # Fix: Ensure all inputs are properly shaped for batch processing
                     if input_ids is not None and input_ids.dim() == 1:
                         input_ids = input_ids.unsqueeze(0)
                     if attention_mask is not None and attention_mask.dim() == 1:
@@ -380,56 +347,38 @@ class AudioAnalyzer:
                     )
                 
                 roberta_module.RobertaModel.forward = patched_forward
-                print("🔧 Applied RoBERTa forward() monkey-patch to fix input_shape bug")
+                print("🔧 Applied RoBERTa forward() monkey-patch")
             
-            # Now use the model for text queries
             with torch.no_grad():
                 text_embedding = self.model.get_text_embedding([query_text], use_tensor=False)
             
-            # Handle different possible return shapes
             if isinstance(text_embedding, np.ndarray):
                 if text_embedding.ndim == 2:
-                    # Shape (1, 512) - take first row
                     text_vec = text_embedding[0]
                 elif text_embedding.ndim == 1:
-                    # Shape (512,) - use directly
                     text_vec = text_embedding
                 else:
-                    raise ValueError(f"Unexpected text_embedding shape: {text_embedding.shape}")
+                    raise ValueError(f"Unexpected shape: {text_embedding.shape}")
             else:
-                raise ValueError(f"Unexpected text_embedding type: {type(text_embedding)}")
+                raise ValueError(f"Unexpected type: {type(text_embedding)}")
             
-            # Compute similarity with audio embedding (vectorized dot product)
-            # Both embeddings are already normalized to unit length
             similarity = float(np.dot(audio_embedding, text_vec))
             return similarity
             
         except Exception as e:
             print(f"❌ Error in compute_text_similarity: {e}")
-            print(f"   Query text: {query_text}")
-            print(f"   Audio embedding shape: {audio_embedding.shape}")
-            import traceback
-            traceback.print_exc()
             raise
     
     def get_metadata(self, audio_path: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Extract artist and title from audio file metadata.
-        Falls back to parsing filename if metadata is missing.
-        
-        Returns:
-            Tuple of (artist, title)
-        """
+        """Extract artist and title from audio file metadata."""
         try:
             audio_file = MutagenFile(audio_path)
-            
             if audio_file is None:
                 return self._parse_filename(audio_path)
             
             artist = None
             title = None
             
-            # Try common tags
             if isinstance(audio_file, MP3):
                 artist = audio_file.get('TPE1', [None])[0] if 'TPE1' in audio_file else None
                 title = audio_file.get('TIT2', [None])[0] if 'TIT2' in audio_file else None
@@ -437,88 +386,50 @@ class AudioAnalyzer:
                 artist = audio_file.get('artist', [None])[0] if 'artist' in audio_file else None
                 title = audio_file.get('title', [None])[0] if 'title' in audio_file else None
             else:
-                # Generic fallback
                 tags = audio_file.tags
                 if tags:
                     artist = tags.get('artist', [None])[0] if 'artist' in tags else None
                     title = tags.get('title', [None])[0] if 'title' in tags else None
             
-            # Convert bytes to string if needed
-            if isinstance(artist, bytes):
-                artist = artist.decode('utf-8', errors='ignore')
-            if isinstance(title, bytes):
-                title = title.decode('utf-8', errors='ignore')
+            if isinstance(artist, bytes): artist = artist.decode('utf-8', errors='ignore')
+            if isinstance(title, bytes): title = title.decode('utf-8', errors='ignore')
             
-            # If no metadata found, try parsing filename
             if not artist and not title:
                 return self._parse_filename(audio_path)
             
-            # If only title is missing, try parsing filename
             if not title:
                 parsed_artist, parsed_title = self._parse_filename(audio_path)
                 title = parsed_title if parsed_title else os.path.splitext(os.path.basename(audio_path))[0]
             
             return artist, title
-        
-        except Exception as e:
-            # If metadata extraction fails, try parsing filename
+        except Exception:
             return self._parse_filename(audio_path)
     
     def _parse_filename(self, audio_path: str) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Parse filename to extract artist and title.
-        Supports patterns like:
-        - "Artist - Title.mp3"
-        - "Artist - Title - Genre.mp3"
-        - "Title.mp3" (no artist)
-        
-        Returns:
-            Tuple of (artist, title)
-        """
+        """Parse filename to extract artist and title."""
         filename = os.path.splitext(os.path.basename(audio_path))[0]
-        
-        # Try different separators
         for separator in [' - ', ' – ', ' — ', '-']:
             if separator in filename:
                 parts = filename.split(separator)
                 if len(parts) >= 2:
                     artist = parts[0].strip()
-                    # Take everything between first and last part (in case of "Artist - Title - Genre")
-                    # Or just the second part if only 2 parts
                     if len(parts) == 2:
                         title = parts[1].strip()
                     else:
-                        # Skip last part if it looks like a genre/category
                         title = separator.join(parts[1:-1]).strip()
-                        # Check if last part is likely a genre (single word, capitalized)
                         last_part = parts[-1].strip()
                         if not (len(last_part.split()) == 1 and last_part[0].isupper()):
-                            # Not a genre, include it
                             title = separator.join(parts[1:]).strip()
                     return artist, title
-        
-        # No separator found, return whole filename as title
         return None, filename
 
 
 def find_audio_files(directory: str) -> List[str]:
-    """
-    Find all audio files in directory.
-    
-    Args:
-        directory: Directory path to search
-    
-    Returns:
-        List of audio file paths
-    """
+    """Find all audio files in directory."""
     audio_extensions = ['*.mp3', '*.wav', '*.flac', '*.ogg', '*.m4a']
     audio_files = []
-    
     for ext in audio_extensions:
         audio_files.extend(glob.glob(os.path.join(directory, ext)))
         audio_files.extend(glob.glob(os.path.join(directory, '**', ext), recursive=True))
-    
-    # Filter out hidden files
     audio_files = [f for f in audio_files if not os.path.basename(f).startswith('.')]
-    
     return sorted(set(audio_files))
