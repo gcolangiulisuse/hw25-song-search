@@ -34,9 +34,14 @@ class Database:
         else:
             print(f"🆕 Creating new database at: {db_path}")
         
-        # Connect to database
+        # Connect to database with performance optimizations
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
+        
+        # Enable WAL mode for better concurrent access
+        self.conn.execute("PRAGMA journal_mode=WAL")
+        # Reduce sync frequency for better performance
+        self.conn.execute("PRAGMA synchronous=NORMAL")
         
         # Initialize schema if new database
         if not db_exists:

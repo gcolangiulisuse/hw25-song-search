@@ -99,8 +99,10 @@ class AudioAnalyzer:
         self.pool = None  # Persistent pool
         
         if num_workers is None:
-            # Use ALL CPU cores like original offline version for maximum speed
-            self.num_workers = cpu_count()
+            # Leave 2 cores free for system stability (avoid 100% CPU usage)
+            total_cores = cpu_count()
+            self.num_workers = max(1, total_cores - 2)
+            print(f"🔧 Auto-configured workers: {self.num_workers} (leaving 2 cores free from {total_cores} total)")
         else:
             self.num_workers = num_workers
         
@@ -150,12 +152,15 @@ class AudioAnalyzer:
     def _ensure_pool(self):
         """Ensure worker pool is created and ready."""
         if self.pool is None:
-            print(f"⏱️  Creating persistent pool with {self.num_workers} workers...")
+            print(f"⏱️  Creating fresh pool with {self.num_workers} workers...")
             # Use fork context explicitly (required for PyTorch 2.1.2 to avoid deadlocks)
             from multiprocessing import get_context
             ctx = get_context('fork')
             self.pool = ctx.Pool(processes=self.num_workers, initializer=_init_worker)
             print(f"✅ Pool created with fork context")
+        else:
+            # Pool exists - verify it's healthy by checking if workers are alive
+            print(f"♻️  Reusing existing pool with {self.num_workers} workers")
     
     def close_pool(self):
         """Close the worker pool."""

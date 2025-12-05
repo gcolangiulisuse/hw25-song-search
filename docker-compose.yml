@@ -12,3 +12,8 @@ services:
       # Mount config directory (database + model stored here)
       - ./models:/app/config
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '10'  # Limit to 10 cores (leave 2 free for system)
+          memory: 8G  # Limit memory to 8GB

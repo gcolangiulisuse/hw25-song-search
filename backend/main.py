@@ -468,8 +468,11 @@ async def run_analysis(songs_path: str):
         
         print(f"\n📊 Found {total} songs: {already_analyzed} already analyzed, {to_analyze} new\n")
         
-        # Analyze each song (ORIGINAL METHOD - uses multiprocessing internally)
-        for idx, audio_path in enumerate(audio_files, 1):
+        # Sequential song processing - one song at a time (parallel causes pool contention)
+        max_concurrent_songs = 1  # Process 1 song at a time to avoid multiprocessing pool conflicts
+        
+        async def analyze_single_song(idx: int, audio_path: str, skip_db_check: bool = False):
+            """Analyze a single song (runs as async task)."""
             filename = os.path.basename(audio_path)
             
             print(f"\n📝 Processing {idx}/{total}: {filename}")
@@ -478,12 +481,11 @@ async def run_analysis(songs_path: str):
             db.update_progress(True, filename, idx, total, progress_pct, f'Processing {idx}/{total}: {filename}...')
             
             try:
-                # Check if already analyzed
-                if db.song_exists(filename):
+                # Check if already analyzed (only if not already checked)
+                if not skip_db_check and db.song_exists(filename):
                     print(f"⏭️  Skipping {filename} (already analyzed)")
                     db.update_progress(True, filename, idx, total, progress_pct, f'Skipping {filename} (already analyzed)')
-                    await asyncio.sleep(0.1)
-                    continue
+                    return
                 
                 print(f"🎵 Starting analysis of {filename}...")
                 
@@ -534,21 +536,45 @@ async def run_analysis(songs_path: str):
                 error_msg = str(e)
                 print(f"\n❌ Error analyzing {filename}: {error_msg}")
                 
-                # Terminate corrupted pool after timeout/error
-                if analyzer.pool:
-                    print("⚠️  Terminating corrupted pool after error...")
-                    analyzer.pool.terminate()
-                    analyzer.pool.join()
+                # FORCE terminate and recreate pool after any error
+                print("⚠️  Force terminating pool after error...")
+                try:
+                    if analyzer.pool:
+                        analyzer.pool.terminate()
+                        analyzer.pool.join(timeout=5)
+                        analyzer.pool.close()
+                except Exception as pool_err:
+                    print(f"⚠️  Error terminating pool: {pool_err}")
+                finally:
                     analyzer.pool = None
-                    print("✅ Pool terminated, will be recreated for next song")
+                    print("✅ Pool destroyed, forcing recreation for next song")
                 
                 print(f"⏭️  Skipping {filename} and continuing with next song...\n")
                 import traceback
                 traceback.print_exc()
                 db.update_progress(True, filename, idx, total, progress_pct, f'Error with {filename} (skipped): {error_msg}')
-                # Continue with next song instead of stopping
-                await asyncio.sleep(0.1)
-                continue
+        
+        # Process songs sequentially with smart skipping
+        semaphore = asyncio.Semaphore(max_concurrent_songs)
+        
+        async def controlled_analyze(idx: int, audio_path: str):
+            """Analyze song with single DB check and semaphore control."""
+            filename = os.path.basename(audio_path)
+            
+            # Quick check if song is already analyzed (SINGLE CHECK - before acquiring semaphore)
+            if db.song_exists(filename):
+                # Skipped songs don't use semaphore - process immediately without delay
+                await analyze_single_song(idx, audio_path, skip_db_check=True)
+                return
+            
+            # For songs needing analysis, acquire semaphore (limits to 1 concurrent)
+            async with semaphore:
+                await analyze_single_song(idx, audio_path, skip_db_check=True)
+        
+        # Execute all tasks - semaphore limits to 1 concurrent analysis, skipped songs are instant
+        print(f"\n🚀 Starting sequential analysis with fast skip optimization\n")
+        tasks = [controlled_analyze(idx, audio_path) for idx, audio_path in enumerate(audio_files, 1)]
+        await asyncio.gather(*tasks)
         
         # Complete - Clear query cache again so new searches include all songs
         db.clear_query_cache()
